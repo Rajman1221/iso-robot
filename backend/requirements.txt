@@ -14,3 +14,10 @@ openpyxl>=3.1.0
 pypdf>=5.0.0
 pyjwt>=2.9.0
 pymilvus>=2.5.0,<2.6.0
+# ── Generic DB adapter (SQLAlchemy) + migrations ──────────────────────────────
+sqlalchemy[asyncio]>=2.0.0
+alembic>=1.13.0
+asyncpg>=0.29.0            # PostgreSQL driver
+aioodbc>=0.5.0            # MSSQL async driver (wraps pyodbc)
+pyodbc>=5.1.0
+greenlet>=3.0.0          # required by async SQLAlchemy

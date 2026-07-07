@@ -9,44 +9,52 @@ from __future__ import annotations
 
 from typing import List
 
-import aiosqlite
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from iso_robot.models import Control, IssueControl
 
 
 class IssueControlRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def assign(self, issue_id: str, control_ids: List[str]) -> int:
         """Link a list of control ids to one issue. Ignores duplicates."""
+        existing = set(
+            (
+                await self._session.execute(
+                    select(IssueControl.control_id).where(IssueControl.issue_id == issue_id)
+                )
+            ).scalars().all()
+        )
         count = 0
         for cid in control_ids:
             cid = str(cid).strip()
-            if not cid:
+            if not cid or cid in existing:
                 continue
-            await self._conn.execute(
-                "INSERT OR IGNORE INTO issue_controls (issue_id, control_id) VALUES (?, ?)",
-                (issue_id, cid),
-            )
+            self._session.add(IssueControl(issue_id=issue_id, control_id=cid))
+            existing.add(cid)
             count += 1
-        await self._conn.commit()
+        await self._session.commit()
         return count
 
     async def clear(self, issue_id: str) -> None:
         """Remove all control links for an issue (used before re-assigning)."""
-        await self._conn.execute("DELETE FROM issue_controls WHERE issue_id = ?", (issue_id,))
-        await self._conn.commit()
+        rows = (
+            await self._session.execute(select(IssueControl).where(IssueControl.issue_id == issue_id))
+        ).scalars().all()
+        for r in rows:
+            await self._session.delete(r)
+        await self._session.commit()
 
     async def list_control_texts_for_issue(self, issue_id: str) -> List[str]:
         """Return the control_text of every control assigned to this issue."""
-        cur = await self._conn.execute(
-            """
-            SELECT c.control_text
-            FROM issue_controls ic
-            JOIN controls c ON c.id = ic.control_id
-            WHERE ic.issue_id = ?
-            ORDER BY c.section_ref
-            """,
-            (issue_id,),
+        stmt = (
+            select(Control.control_text)
+            .join(IssueControl, IssueControl.control_id == Control.id)
+            .where(IssueControl.issue_id == issue_id)
+            .order_by(Control.section_ref)
         )
-        rows = await cur.fetchall()
-        return [str(r["control_text"]).strip() for r in rows if r["control_text"]]
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [str(text).strip() for text in rows if text]

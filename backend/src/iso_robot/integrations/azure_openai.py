@@ -15,7 +15,7 @@ def get_azure_openai_client(settings: Settings) -> Optional[Any]:
         api_key=settings.azure_openai_key,
         api_version=settings.azure_openai_api_version,
         azure_endpoint=settings.azure_openai_endpoint,
-        timeout=60.0,
+        timeout=300.0,
     )
 
 _async_client: Optional[Any] = None
@@ -47,7 +47,7 @@ def get_async_azure_openai_client(settings: Settings) -> Optional[Any]:
         api_key=settings.azure_openai_key,
         api_version=settings.azure_openai_api_version,
         azure_endpoint=settings.azure_openai_endpoint,
-        timeout=60.0
+        timeout=120.0
     )
     _async_client_key = key
     return _async_client

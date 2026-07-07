@@ -5,14 +5,14 @@ import io
 import uuid
 from typing import Any
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.helpers.slug import slugify
 from iso_robot.repositories.issue_repository import IssueRepository
 
 
 async def import_issues_from_csv(
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     file_bytes: bytes,
     encoding: str = "utf-8",
 ) -> dict[str, Any]:

@@ -23,7 +23,8 @@
               "process/architecture",
               "process/concepts",
               "process/background-jobs",
-              "process/end-to-end-flow"
+              "process/end-to-end-flow",
+              "flow/00-automated-ingest-pipeline"
             ]
           },
           {
@@ -60,7 +61,8 @@
             "group": "Essentials",
             "icon": "gear",
             "pages": [
-              "api-reference/conventions"
+              "api-reference/conventions",
+              "api-reference/pipeline"
             ]
           },
           {
@@ -88,8 +90,8 @@
   "navbar": {
     "primary": {
       "type": "button",
-      "label": "End-to-End Flow",
-      "href": "/process/end-to-end-flow"
+      "label": "Automated Ingest",
+      "href": "/flow/00-automated-ingest-pipeline"
     }
   },
   "footer": {

@@ -58,16 +58,19 @@ missing.
 
 ## Start risk owner assignment job
 
-```http
-POST /risk-assignments/run
-```
-
-**Auth:** Bearer · **Job type:** `risk_owner_assignment` · **Returns `202`**
+<Warning>
+`POST /risk-assignments/run` has been **removed**. Owner assignment now runs
+automatically as the final stage of `POST /ingest/{clientOrgId}`, right after
+risk tagging, with `auto_apply=true` — high-confidence recommendations are
+applied immediately to `risks.owner_user_id` rather than waiting for
+`POST /risk-assignments/apply-selected`. See [Pipeline API](/api-reference/pipeline).
+</Warning>
 
 Scores every active user in the approved hierarchy snapshot against each
 unassigned risk using the weighted model (KPI owner 0.35 · process owner 0.30 ·
 function 0.20 · department 0.10 · region 0.10 · management-level fit ±0.05) and
-stores the best owner plus alternates.
+stores the best owner plus alternates. The request/response shape below
+reflects the parameters the automated pipeline task passes internally.
 
 ### Request
 

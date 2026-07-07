@@ -6,11 +6,14 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-import aiosqlite
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.domain.risk_tagging import ensure_default_catalogs
 from iso_robot.helpers.slug import slugify
+from iso_robot.models import User
+from iso_robot.models.base import to_dict
 from iso_robot.repositories.job_repository import JobRepository
 from iso_robot.repositories.org_repository import OrgRepository, RiskRepository
 from iso_robot.repositories.risk_assignment_repository import (
@@ -53,20 +56,14 @@ _ROLE_PROFILES = {
 }
 
 
-async def _org_users(conn: aiosqlite.Connection, client_org_id: str) -> List[dict[str, Any]]:
-    cur = await conn.execute(
-        """
-        SELECT id, email, full_name, role, is_active
-        FROM users WHERE client_org_id = ?
-        """,
-        (client_org_id,),
-    )
-    rows = await cur.fetchall()
-    return [dict(r) for r in rows]
+async def _org_users(conn: AsyncSession, client_org_id: str) -> List[dict[str, Any]]:
+    stmt = select(User).where(User.client_org_id == client_org_id)
+    rows = (await conn.execute(stmt)).scalars().all()
+    return [to_dict(r) for r in rows]
 
 
 async def ensure_default_hierarchy(
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     client_org_id: str,
 ) -> dict[str, Any]:
     """Returns the latest approved hierarchy snapshot, bootstrapping one when absent."""
@@ -285,7 +282,7 @@ def _build_rationale(
 
 async def run_risk_owner_assignment_job(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     payload: dict[str, Any],
     *,
     job_id: str,

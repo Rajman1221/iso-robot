@@ -1,71 +1,48 @@
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from iso_robot.repositories.db import dumps_json
+from iso_robot.models import CatalogItem, RiskTag
+from iso_robot.models.base import to_dict
 
 TAG_DIMENSIONS = ("process", "function", "department", "kpi", "region", "control_family")
 TAG_STATUSES = ("proposed", "applied", "needs_review", "rejected")
 
 
-def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _loads_json(raw: Any, default: Any) -> Any:
-    if raw is None or raw == "":
-        return default
-    if isinstance(raw, (dict, list)):
-        return raw
-    try:
-        return json.loads(raw)
-    except Exception:
-        return default
-
-
 def _row_to_risk_tag(row: dict[str, Any]) -> dict[str, Any]:
     out = dict(row)
     for dim in TAG_DIMENSIONS:
-        out[f"{dim}_tags"] = _loads_json(out.pop(f"{dim}_tags_json", "[]"), [])
-    out["evidence"] = _loads_json(out.pop("evidence_json", "[]"), [])
-    out["inputs"] = _loads_json(out.pop("inputs_json", "{}"), {})
+        out[f"{dim}_tags"] = out.pop(f"{dim}_tags_json", None) or []
+    out["evidence"] = out.pop("evidence_json", None) or []
+    out["inputs"] = out.pop("inputs_json", None) or {}
     return out
 
 
 class CatalogRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def insert_items(self, items: List[dict[str, Any]]) -> int:
-        now = _now_iso()
         for item in items:
-            await self._conn.execute(
-                """
-                INSERT INTO catalog_items (
-                  id, client_org_id, catalog_id, dimension, name, description,
-                  keywords_json, criticality, owner_user_id, catalog_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    item.get("id") or str(uuid.uuid4()),
-                    item["client_org_id"],
-                    item["catalog_id"],
-                    item["dimension"],
-                    item["name"],
-                    item.get("description"),
-                    dumps_json(item.get("keywords") or []),
-                    item.get("criticality") or "standard",
-                    item.get("owner_user_id"),
-                    item.get("catalog_version") or "v1",
-                    now,
-                ),
+            self._session.add(
+                CatalogItem(
+                    id=item.get("id") or str(uuid.uuid4()),
+                    client_org_id=item["client_org_id"],
+                    catalog_id=item["catalog_id"],
+                    dimension=item["dimension"],
+                    name=item["name"],
+                    description=item.get("description"),
+                    keywords_json=item.get("keywords") or [],
+                    criticality=item.get("criticality") or "standard",
+                    owner_user_id=item.get("owner_user_id"),
+                    catalog_version=item.get("catalog_version") or "v1",
+                )
             )
-        await self._conn.commit()
+        await self._session.commit()
         return len(items)
 
     async def list_for_org(
@@ -73,64 +50,45 @@ class CatalogRepository:
         client_org_id: str,
         dimensions: Optional[List[str]] = None,
     ) -> List[dict[str, Any]]:
+        stmt = select(CatalogItem).where(CatalogItem.client_org_id == client_org_id)
         if dimensions:
-            placeholders = ",".join("?" for _ in dimensions)
-            cur = await self._conn.execute(
-                f"""
-                SELECT * FROM catalog_items
-                WHERE client_org_id = ? AND dimension IN ({placeholders})
-                ORDER BY dimension, name
-                """,
-                (client_org_id, *dimensions),
-            )
-        else:
-            cur = await self._conn.execute(
-                "SELECT * FROM catalog_items WHERE client_org_id = ? ORDER BY dimension, name",
-                (client_org_id,),
-            )
-        rows = await cur.fetchall()
+            stmt = stmt.where(CatalogItem.dimension.in_(dimensions))
+        stmt = stmt.order_by(CatalogItem.dimension, CatalogItem.name)
+        rows = (await self._session.execute(stmt)).scalars().all()
         out = []
         for r in rows:
-            d = dict(r)
-            d["keywords"] = _loads_json(d.pop("keywords_json", "[]"), [])
+            d = to_dict(r)
+            d["keywords"] = d.pop("keywords_json", None) or []
             out.append(d)
         return out
 
     async def get_items_by_ids(self, item_ids: List[str]) -> List[dict[str, Any]]:
         if not item_ids:
             return []
-        placeholders = ",".join("?" for _ in item_ids)
-        cur = await self._conn.execute(
-            f"SELECT * FROM catalog_items WHERE id IN ({placeholders})",
-            tuple(item_ids),
-        )
-        rows = await cur.fetchall()
+        stmt = select(CatalogItem).where(CatalogItem.id.in_(item_ids))
+        rows = (await self._session.execute(stmt)).scalars().all()
         out = []
         for r in rows:
-            d = dict(r)
-            d["keywords"] = _loads_json(d.pop("keywords_json", "[]"), [])
+            d = to_dict(r)
+            d["keywords"] = d.pop("keywords_json", None) or []
             out.append(d)
         return out
 
     async def catalog_ids_for_org(self, client_org_id: str) -> Dict[str, str]:
-        cur = await self._conn.execute(
-            "SELECT DISTINCT dimension, catalog_id FROM catalog_items WHERE client_org_id = ?",
-            (client_org_id,),
-        )
-        rows = await cur.fetchall()
+        stmt = select(CatalogItem.dimension, CatalogItem.catalog_id).where(
+            CatalogItem.client_org_id == client_org_id
+        ).distinct()
+        rows = (await self._session.execute(stmt)).all()
         return {str(r[0]): str(r[1]) for r in rows}
 
     async def has_items(self, client_org_id: str) -> bool:
-        cur = await self._conn.execute(
-            "SELECT 1 FROM catalog_items WHERE client_org_id = ? LIMIT 1",
-            (client_org_id,),
-        )
-        return await cur.fetchone() is not None
+        stmt = select(CatalogItem.id).where(CatalogItem.client_org_id == client_org_id).limit(1)
+        return (await self._session.execute(stmt)).scalar_one_or_none() is not None
 
 
 class RiskTagRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def insert(
         self,
@@ -148,39 +106,33 @@ class RiskTagRepository:
         auto_applied: bool = False,
     ) -> dict[str, Any]:
         row_id = str(uuid.uuid4())
-        now = _now_iso()
-        await self._conn.execute(
-            """
-            INSERT INTO risk_tags (
-              id, client_org_id, risk_id,
-              process_tags_json, function_tags_json, department_tags_json,
-              kpi_tags_json, region_tags_json, control_family_tags_json,
-              tag_status, confidence, rationale, evidence_json, inputs_json,
-              catalog_version, run_job_id, auto_applied, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                row_id, client_org_id, risk_id,
-                dumps_json(tags_by_dimension.get("process") or []),
-                dumps_json(tags_by_dimension.get("function") or []),
-                dumps_json(tags_by_dimension.get("department") or []),
-                dumps_json(tags_by_dimension.get("kpi") or []),
-                dumps_json(tags_by_dimension.get("region") or []),
-                dumps_json(tags_by_dimension.get("control_family") or []),
-                tag_status, confidence, rationale,
-                dumps_json(evidence or []),
-                dumps_json(inputs or {}),
-                catalog_version, run_job_id, 1 if auto_applied else 0,
-                now, now,
-            ),
+        self._session.add(
+            RiskTag(
+                id=row_id,
+                client_org_id=client_org_id,
+                risk_id=risk_id,
+                process_tags_json=tags_by_dimension.get("process") or [],
+                function_tags_json=tags_by_dimension.get("function") or [],
+                department_tags_json=tags_by_dimension.get("department") or [],
+                kpi_tags_json=tags_by_dimension.get("kpi") or [],
+                region_tags_json=tags_by_dimension.get("region") or [],
+                control_family_tags_json=tags_by_dimension.get("control_family") or [],
+                tag_status=tag_status,
+                confidence=confidence,
+                rationale=rationale,
+                evidence_json=evidence or [],
+                inputs_json=inputs or {},
+                catalog_version=catalog_version,
+                run_job_id=run_job_id,
+                auto_applied=auto_applied,
+            )
         )
-        await self._conn.commit()
+        await self._session.commit()
         return (await self.get_by_id(row_id))  # type: ignore[return-value]
 
     async def get_by_id(self, row_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute("SELECT * FROM risk_tags WHERE id = ?", (row_id,))
-        row = await cur.fetchone()
-        return _row_to_risk_tag(dict(row)) if row else None
+        obj = await self._session.get(RiskTag, row_id)
+        return _row_to_risk_tag(to_dict(obj)) if obj else None
 
     async def list_for_org(
         self,
@@ -190,34 +142,28 @@ class RiskTagRepository:
         status: Optional[str] = None,
         limit: int = 100,
     ) -> List[dict[str, Any]]:
-        sql = "SELECT * FROM risk_tags WHERE client_org_id = ?"
-        params: list[Any] = [client_org_id]
+        stmt = select(RiskTag).where(RiskTag.client_org_id == client_org_id)
         if risk_id:
-            sql += " AND risk_id = ?"
-            params.append(risk_id)
+            stmt = stmt.where(RiskTag.risk_id == risk_id)
         if status:
-            sql += " AND tag_status = ?"
-            params.append(status)
-        sql += " ORDER BY datetime(created_at) DESC LIMIT ?"
-        params.append(limit)
-        cur = await self._conn.execute(sql, tuple(params))
-        rows = await cur.fetchall()
-        return [_row_to_risk_tag(dict(r)) for r in rows]
+            stmt = stmt.where(RiskTag.tag_status == status)
+        stmt = stmt.order_by(RiskTag.created_at.desc()).limit(limit)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_row_to_risk_tag(to_dict(r)) for r in rows]
 
     async def latest_for_risk(self, risk_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            "SELECT * FROM risk_tags WHERE risk_id = ? ORDER BY datetime(created_at) DESC LIMIT 1",
-            (risk_id,),
-        )
-        row = await cur.fetchone()
-        return _row_to_risk_tag(dict(row)) if row else None
+        stmt = select(RiskTag).where(RiskTag.risk_id == risk_id).order_by(RiskTag.created_at.desc()).limit(1)
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return _row_to_risk_tag(to_dict(obj)) if obj else None
 
     async def delete_open_for_risk(self, risk_id: str, run_job_id: Optional[str] = None) -> None:
-        await self._conn.execute(
-            "DELETE FROM risk_tags WHERE risk_id = ? AND tag_status IN ('proposed', 'needs_review')",
-            (risk_id,),
+        stmt = select(RiskTag).where(
+            RiskTag.risk_id == risk_id, RiskTag.tag_status.in_(("proposed", "needs_review"))
         )
-        await self._conn.commit()
+        rows = (await self._session.execute(stmt)).scalars().all()
+        for r in rows:
+            await self._session.delete(r)
+        await self._session.commit()
 
     async def update_review(
         self,
@@ -227,28 +173,22 @@ class RiskTagRepository:
         reviewer_user_id: Optional[str],
         reviewer_notes: Optional[str],
     ) -> None:
-        await self._conn.execute(
-            """
-            UPDATE risk_tags
-            SET tag_status = ?, reviewer_user_id = ?, reviewer_notes = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (tag_status, reviewer_user_id, reviewer_notes, _now_iso(), row_id),
-        )
-        await self._conn.commit()
+        obj = await self._session.get(RiskTag, row_id)
+        if obj is None:
+            return
+        obj.tag_status = tag_status
+        obj.reviewer_user_id = reviewer_user_id
+        obj.reviewer_notes = reviewer_notes
+        await self._session.commit()
 
     async def count_distinct_risks_by_status(self, client_org_id: str, status: str) -> int:
-        cur = await self._conn.execute(
-            "SELECT COUNT(DISTINCT risk_id) FROM risk_tags WHERE client_org_id = ? AND tag_status = ?",
-            (client_org_id, status),
-        )
-        row = await cur.fetchone()
-        return int(row[0]) if row else 0
+        stmt = select(RiskTag.risk_id).where(
+            RiskTag.client_org_id == client_org_id, RiskTag.tag_status == status
+        ).distinct()
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return len(rows)
 
     async def last_updated_at(self, client_org_id: str) -> Optional[str]:
-        cur = await self._conn.execute(
-            "SELECT MAX(updated_at) FROM risk_tags WHERE client_org_id = ?",
-            (client_org_id,),
-        )
-        row = await cur.fetchone()
-        return str(row[0]) if row and row[0] else None
+        stmt = select(RiskTag).where(RiskTag.client_org_id == client_org_id).order_by(RiskTag.updated_at.desc()).limit(1)
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return to_dict(obj)["updated_at"] if obj else None

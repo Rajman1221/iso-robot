@@ -43,23 +43,14 @@ GET /risk-library?limit=50
 
 ## Run risk discovery
 
-```http
-POST /risk-discovery/run
-```
+<Warning>
+`POST /risk-discovery/run` has been **removed**. Risk discovery now runs
+automatically as part of `POST /ingest/{clientOrgId}` — see
+[Pipeline API](/api-reference/pipeline). You can still start it via the
+generic, non-org-scoped `POST /jobs` (job type `risk_discovery`) for debugging.
+</Warning>
 
-**Auth:** Bearer · **Job type:** `risk_discovery`
-
-BM25 + LLM matching of issues to library entries → `candidate_risks`.
-
-### Request
-
-```json
-{}
-```
-
-### Response `200`
-
-A `JobResponse`.
+BM25 + LLM matching of issues to library entries produces `candidate_risks`.
 
 ---
 
@@ -101,6 +92,8 @@ Full JSON bundle: `documents_summary`, `controls`, `issues`, `candidate_risks`,
 
 ---
 
-## Poll the discovery job
+## Poll the discovery job (legacy `/jobs` path only)
 
-See [Jobs → Poll job status](/api-reference/jobs#poll-job-status).
+See [Jobs → Poll job status](/api-reference/jobs#poll-job-status). Not needed
+when discovery runs inside the automated pipeline — poll
+`GET /pipeline/status/{clientOrgId}` instead.

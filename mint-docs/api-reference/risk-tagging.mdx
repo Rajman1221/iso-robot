@@ -56,15 +56,18 @@ Returns the tagging work queue: risks where required dimensions
 
 ## Start risk tagging job
 
-```http
-POST /risk-tagging/run
-```
-
-**Auth:** Bearer · **Job type:** `risk_tagging` · **Returns `202`**
+<Warning>
+`POST /risk-tagging/run` has been **removed**. Tagging now runs automatically
+as a stage of `POST /ingest/{clientOrgId}` (immediately before risk owner
+assignment), with `auto_apply=true` —
+high-confidence recommendations are applied immediately rather than waiting for
+`POST /risk-tagging/apply-selected`. See [Pipeline API](/api-reference/pipeline).
+</Warning>
 
 Matches eligible risks against the organisation catalogs and stores
 recommendations with confidence, rationale, and evidence. Reference catalogs are
-bootstrapped from Business Demography on first run.
+bootstrapped from Business Demography on first run. The request/response shape
+below reflects the parameters the automated pipeline task passes internally.
 
 ### Request
 

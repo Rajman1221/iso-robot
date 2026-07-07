@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.domain.llm_service import chat_json_object
@@ -194,7 +194,7 @@ def compute_tag_state(
 
 
 async def ensure_default_catalogs(
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     client_org_id: str,
 ) -> Dict[str, str]:
     """Bootstrap reference catalogs from business demography when none exist yet."""
@@ -580,7 +580,7 @@ def _merge_applied_tags(
 
 async def run_risk_tagging_job(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     payload: dict[str, Any],
     *,
     job_id: str,

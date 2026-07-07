@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import BackgroundTasks, Depends
 
 from iso_robot.config import Settings
@@ -33,7 +33,7 @@ from iso_robot.schemas.api import (
 
 async def _require_issue_access(
     issue_id: str,
-    db: aiosqlite.Connection,
+    db: AsyncSession,
     current_user: dict,
 ) -> dict:
     row = await IssueRepository(db).get_by_id(issue_id)
@@ -62,7 +62,7 @@ def _latest_result_by_candidate(rows: list[dict[str, Any]]) -> dict[str, dict[st
 
 
 async def list_candidate_risks(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = 500,
     offset: int = 0,
 ) -> list[CandidateRiskListItem]:
@@ -96,7 +96,7 @@ async def list_candidate_risks(
 
 
 async def list_risk_library(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = 2000,
     offset: int = 0,
 ) -> list[RiskLibraryListItem]:
@@ -107,7 +107,7 @@ async def list_risk_library(
 
 
 async def seed_risk_library_handler(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_app_settings)],
     path: Optional[str] = None,
 ) -> SeedRiskLibraryResponse:
@@ -134,7 +134,7 @@ async def run_risk_discovery(
 async def run_risk_scoring(
     background_tasks: BackgroundTasks,
     jobs: Annotated[JobRepository, Depends(get_job_repo)],
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[dict, Depends(get_current_user)],
     request: Optional[ScoreRisksRequest] = None,
 ) -> JobResponse:
@@ -155,7 +155,7 @@ async def run_risk_scoring(
 
 async def get_issue_risk_assessment(
     issue_id: str,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[dict, Depends(get_current_user)],
 ) -> RiskAssessmentResponse:
     await _require_issue_access(issue_id, db, current_user)

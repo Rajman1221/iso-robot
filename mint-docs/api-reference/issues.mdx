@@ -4,60 +4,15 @@ description: "Generate issues from controls, classify them, and read issues and 
 icon: "triangle-exclamation"
 ---
 
-Issue synthesis and classification are background jobs. Related process narrative:
-[Stage 04 · Issues](/flow/04-issues).
+Related process narrative: [Stage 04 · Issues](/flow/04-issues).
 
-## Generate issues from controls
-
-```http
-POST /issues/from-controls/{orgId}
-```
-
-**Auth:** Bearer · **Job type:** `issues_from_controls`
-
-Synthesises issues from the org's controls. With `classify_after: true`, spawns a
-chained `classify_issues` job once issues exist.
-
-### Request
-
-```json
-{
-  "document_id": "uuid",
-  "replace_existing": true,
-  "classify_after": true,
-  "sector_hint": null,
-  "region_hint": null
-}
-```
-
-### Response `200`
-
-A `JobResponse` (`id`, `type`, `status`, …).
-
----
-
-## Classify issues
-
-```http
-POST /issues/classify
-```
-
-**Auth:** Bearer · **Job type:** `classify_issues`
-
-Runs PESTEL / SWOT / TVRA classification. Omit `issue_ids` to classify all
-unclassified issues.
-
-### Request
-
-```json
-{ "issue_ids": ["uuid"] }
-```
-
-### Response `200`
-
-A `JobResponse`.
-
----
+<Warning>
+`POST /issues/from-controls/{orgId}` and `POST /issues/classify` have been
+**removed**. Both now run automatically as part of `POST /ingest/{clientOrgId}`
+— see [Pipeline API](/api-reference/pipeline). You can still start
+`issues_from_controls` / `classify_issues` via the generic, non-org-scoped
+`POST /jobs` (see [Jobs](/api-reference/jobs)) for debugging.
+</Warning>
 
 ## List issues
 

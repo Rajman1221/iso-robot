@@ -17,6 +17,7 @@ from iso_robot.handlers import (
 from iso_robot.handlers import auth, org, controls_org
 from iso_robot.handlers import risk_assignment, risk_tagging
 from iso_robot.handlers import chatbot
+from iso_robot.handlers import pipeline
 
 router = APIRouter()
 
@@ -41,13 +42,9 @@ router.add_api_route("/controls/extract", controls.extract_controls, methods=["P
 router.add_api_route("/issues", issues.list_issues, methods=["GET"], tags=["issues"])
 router.add_api_route("/issues/seed-from-poc", issues.seed_issues_from_poc, methods=["POST"], tags=["issues"])
 router.add_api_route("/issues/import-csv", issues.import_issues_csv, methods=["POST"], tags=["issues"])
-router.add_api_route("/issues/classify", issues.classify_issues, methods=["POST"], tags=["issues"])
-router.add_api_route(
-    "/issues/from-controls/{client_org_id}",
-    issues.issues_from_controls,
-    methods=["POST"],
-    tags=["issues"],
-)
+# NOTE: manual /issues/classify and /issues/from-controls/{client_org_id} triggers were
+# removed — classify_issues and issues_from_controls now run automatically as stages of
+# the POST /ingest/{client_org_id} pipeline (see iso_robot/pipeline/tasks.py).
 router.add_api_route("/issues/stats/{client_org_id}", issues.issue_stats_for_org, methods=["GET"], tags=["issues"])
 router.add_api_route("/issues/{issue_id}", issues.get_issue, methods=["GET"], tags=["issues"])
 router.add_api_route(
@@ -68,8 +65,8 @@ router.add_api_route("/risk-library", risk.list_risk_library, methods=["GET"], t
 router.add_api_route("/risk-library/seed-from-poc", risk.seed_risk_library_handler, methods=["POST"], tags=["risk-library"])
 
 router.add_api_route("/candidate-risks", risk.list_candidate_risks, methods=["GET"], tags=["risk-discovery"])
-router.add_api_route("/risk-discovery/run", risk.run_risk_discovery, methods=["POST"], tags=["risk-discovery"])
-router.add_api_route("/risk-scoring/run", risk.run_risk_scoring, methods=["POST"], tags=["risk-scoring"])
+# NOTE: manual /risk-discovery/run and /risk-scoring/run triggers were removed — both
+# now run automatically as stages of the POST /ingest/{client_org_id} pipeline.
 router.add_api_route(
     "/issues/{issue_id}/risk-assessment",
     risk.get_issue_risk_assessment,
@@ -99,28 +96,36 @@ router.add_api_route("/control-documents/{client_org_id}", org.list_control_docu
 router.add_api_route("/business-demography/update", org.update_demography, methods=["POST"], tags=["business-demography"])
 router.add_api_route("/business-demography/{org_id}", org.get_demography, methods=["GET"], tags=["business-demography"])
 
-# Org-aware Control Extraction (API 4 — Newrequirement)
-router.add_api_route("/control-documents/extract/{client_org_id}", controls_org.extract_controls_for_org, methods=["POST"], tags=["control-extraction"])
+# NOTE: manual /control-documents/extract/{client_org_id} trigger (API 4) was removed —
+# control extraction now runs automatically as a stage of the POST /ingest pipeline.
 
 # Risk Upload (API 10)
 router.add_api_route("/risks/upload-selected", org.upload_risks, methods=["POST"], tags=["risks"])
 
 # ── Stage 09 — Risk Tagging ───────────────────────────────────────────────────
 router.add_api_route("/risks/untagged", risk_tagging.list_untagged_risks, methods=["GET"], tags=["risk-tagging"])
-router.add_api_route("/risk-tagging/run", risk_tagging.run_risk_tagging, methods=["POST"], status_code=202, tags=["risk-tagging"])
+# NOTE: manual /risk-tagging/run trigger was removed — tagging now runs automatically as
+# the final stage of the POST /ingest/{client_org_id} pipeline.
 router.add_api_route("/risk-tags", risk_tagging.list_risk_tags, methods=["GET"], tags=["risk-tagging"])
 router.add_api_route("/risk-tagging/apply-selected", risk_tagging.apply_selected_tags, methods=["POST"], tags=["risk-tagging"])
 router.add_api_route("/risk-tagging/kpis", risk_tagging.risk_tagging_kpis, methods=["GET"], tags=["risk-tagging"])
 
 # ── Stage 10 — Risk Owner Assignment ──────────────────────────────────────────
 router.add_api_route("/risks/unassigned", risk_assignment.list_unassigned_risks, methods=["GET"], tags=["risk-assignment"])
-router.add_api_route("/risk-assignments/run", risk_assignment.run_risk_assignment, methods=["POST"], status_code=202, tags=["risk-assignment"])
+# NOTE: manual /risk-assignments/run trigger was removed — owner assignment now runs
+# automatically as the final stage of the POST /ingest/{client_org_id} pipeline
+# (auto_apply=True), right after risk_tagging.
 router.add_api_route("/risk-assignments/kpis", risk_assignment.risk_assignment_kpis, methods=["GET"], tags=["risk-assignment"])
 router.add_api_route("/risk-assignments/apply-selected", risk_assignment.apply_selected_assignments, methods=["POST"], tags=["risk-assignment"])
 router.add_api_route("/risk-assignments", risk_assignment.list_risk_assignments, methods=["GET"], tags=["risk-assignment"])
 router.add_api_route("/organisation-hierarchy/{org_id}", risk_assignment.get_organisation_hierarchy, methods=["GET"], tags=["organisation-hierarchy"])
 
 router.add_api_route("/risks/{client_org_id}", org.list_risks, methods=["GET"], tags=["risks"])
+
+# ── Automated Pipeline — external-backend auth (ingest + status) ───────────────
+router.add_api_route("/ingest/{client_org_id}", pipeline.ingest, methods=["POST"], status_code=202, tags=["pipeline"])
+router.add_api_route("/pipeline/status/{client_org_id}", pipeline.pipeline_status, methods=["GET"], tags=["pipeline"])
+router.add_api_route("/pipeline/cancel/{client_org_id}", pipeline.cancel_pipeline, methods=["POST"], tags=["pipeline"])
 
 # ── Chatbot — Milvus-backed SSE assistant (scoped to the user's org) ───────────
 router.add_api_route("/chatbot/query", chatbot.chat_stream, methods=["POST"], tags=["chatbot"])

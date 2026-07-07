@@ -4,44 +4,54 @@ description: "Start control extraction and read the extracted controls."
 icon: "clipboard-check"
 ---
 
-Extraction is a background job; the list endpoint reads results as they land.
-Related process narrative: [Stage 03 · Extract Controls](/flow/03-extract-controls).
+The list endpoint reads results as they land. Related process narrative:
+[Stage 03 · Extract Controls](/flow/03-extract-controls).
 
-## Start control extraction
+<Warning>
+`POST /control-documents/extract/{orgId}` (org-scoped) has been **removed**.
+Control extraction now runs automatically as part of
+`POST /ingest/{clientOrgId}` — see [Pipeline API](/api-reference/pipeline). The
+global, non-org-scoped `POST /controls/extract` below still works for debugging.
+</Warning>
+
+## Start control extraction (global, non-org-scoped, debug only)
 
 ```http
-POST /control-documents/extract/{orgId}
+POST /controls/extract
 ```
 
 **Auth:** Bearer · **Job type:** `extract_controls`
 
-Extracts controls from all of the organisation's PDFs. Returns immediately; poll
-the job and read `/controls` while it runs.
+Extracts controls from PDFs across **all** organisations (not scoped to a
+`client_org_id`). Returns immediately; poll the job and read `/controls` while
+it runs. For a real ingest, use `POST /ingest/{clientOrgId}` instead.
 
 ### Request
 
 ```json
-{}
+{
+  "document_ids": null
+}
 ```
+
+`document_ids` is optional — if omitted, **every** PDF row in the `documents`
+table (across all organisations) is processed.
 
 ### Response `200`
 
 ```json
 {
-  "status": "accepted",
-  "data": {
-    "job_id": "uuid",
-    "documents_queued": 2,
-    "folder": "…",
-    "processing_status": "in_progress"
-  }
+  "id": "uuid",
+  "type": "extract_controls",
+  "status": "pending",
+  "payload": { "document_ids": [] },
+  "error": null,
+  "created_at": "…",
+  "updated_at": "…"
 }
 ```
 
-| HTTP | code |
-| --- | --- |
-| 400 | `validation_error` (no documents) |
-| 404 | `CLIENT_ORG_NOT_FOUND` |
+Poll `GET /jobs/{id}` (see below) until `status` is `completed` or `failed`.
 
 ---
 

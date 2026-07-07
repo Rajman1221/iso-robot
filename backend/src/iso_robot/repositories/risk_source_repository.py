@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-import aiosqlite
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from iso_robot.repositories.db import dumps_json
-
-
-def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+from iso_robot.models import RiskSource
+from iso_robot.models.base import to_dict
 
 
 class RiskSourceRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def upsert(
         self,
@@ -25,31 +22,25 @@ class RiskSourceRepository:
         url: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> None:
-        meta = dumps_json(metadata or {})
-        now = _now_iso()
-        await self._conn.execute(
-            """
-            INSERT INTO risk_sources (id, name, source_type, url, metadata_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              name = excluded.name,
-              source_type = COALESCE(excluded.source_type, source_type),
-              url = COALESCE(excluded.url, url),
-              metadata_json = excluded.metadata_json
-            """,
-            (source_id, name, source_type, url, meta, now),
-        )
-        await self._conn.commit()
+        existing = await self._session.get(RiskSource, source_id)
+        if existing is None:
+            self._session.add(
+                RiskSource(
+                    id=source_id,
+                    name=name,
+                    source_type=source_type,
+                    url=url,
+                    metadata_json=metadata or {},
+                )
+            )
+        else:
+            existing.name = name
+            existing.source_type = source_type or existing.source_type
+            existing.url = url or existing.url
+            existing.metadata_json = metadata or {}
+        await self._session.commit()
 
     async def list_all(self, limit: int = 2000, offset: int = 0) -> List[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, name, source_type, url, metadata_json, created_at
-            FROM risk_sources
-            ORDER BY name
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        stmt = select(RiskSource).order_by(RiskSource.name).limit(limit).offset(offset)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]

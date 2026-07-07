@@ -4,7 +4,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.domain.llm_service import chat_json_object
@@ -142,7 +142,7 @@ async def _llm_batch(
 
 async def run_issues_from_controls_job(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     client_org_id = str(payload.get("client_org_id") or "").strip()

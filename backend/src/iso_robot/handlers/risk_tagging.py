@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import BackgroundTasks, Depends, Query
 
 from iso_robot.deps import (
@@ -87,7 +87,7 @@ def tag_names(tags: Any) -> List[str]:
 # ── API 5.1: List Untagged Risks ──────────────────────────────────────────────
 
 async def list_untagged_risks(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     current_user: Annotated[dict, Depends(get_current_user)],
     client_org_id: str = Query(...),
@@ -130,7 +130,7 @@ async def list_untagged_risks(
 async def run_risk_tagging(
     body: RiskTaggingRunRequest,
     background_tasks: BackgroundTasks,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     jobs: Annotated[JobRepository, Depends(get_job_repo)],
     audit_repo: Annotated[AuditLogRepository, Depends(get_audit_repo)],
@@ -217,7 +217,7 @@ async def run_risk_tagging(
 # ── API 5.3: List Risk Tag Recommendations ────────────────────────────────────
 
 async def list_risk_tags(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     current_user: Annotated[dict, Depends(get_current_user)],
     client_org_id: str = Query(...),
@@ -292,7 +292,7 @@ _DIMENSION_FIELDS = {
 
 async def apply_selected_tags(
     body: ApplySelectedTagsRequest,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     audit_repo: Annotated[AuditLogRepository, Depends(get_audit_repo)],
     current_user: Annotated[dict, Depends(get_current_user)],
@@ -457,7 +457,7 @@ async def apply_selected_tags(
 # ── API 5.5: Get Risk Tagging KPIs ────────────────────────────────────────────
 
 async def risk_tagging_kpis(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     current_user: Annotated[dict, Depends(get_current_user)],
     client_org_id: str = Query(...),

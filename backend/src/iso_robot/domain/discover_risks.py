@@ -5,7 +5,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 from rank_bm25 import BM25Okapi
 
 from iso_robot.config import Settings
@@ -133,7 +133,7 @@ async def _llm_match_library(
 
 async def run_risk_discovery(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
 ) -> dict[str, int]:
     issue_repo = IssueRepository(conn)
     cls_repo = IssueClassificationRepository(conn)

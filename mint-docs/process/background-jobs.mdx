@@ -13,10 +13,83 @@ ticket and does the job in the background. You check the ticket until it says
 
 The expensive parts of the pipeline — parsing PDFs, calling the LLM, scoring risks —
 can take seconds to minutes. Rather than block the caller, ISO Robot runs them as
-**background jobs**. Every long-running endpoint follows the same three-beat
-pattern, so once you learn it once you know it everywhere.
+**background work** via Celery. There are two patterns:
 
-## The pattern
+1. **Automated pipeline** (the only way to run the org-scoped risk workflow) —
+   one ingest call chains all stages; poll `GET /pipeline/status/{clientOrgId}`.
+   See [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
+2. **Legacy global job pattern** — two non-org-scoped endpoints
+   (`POST /controls/extract`, `POST /jobs`) still start a single job directly;
+   poll `GET /jobs/{jobId}`. The **org-scoped** per-stage trigger endpoints that
+   used to exist have been removed — see the table below.
+
+## Automated pipeline pattern
+
+<Steps>
+  <Step title="Ingest">
+    `POST /ingest/{clientOrgId}` returns **immediately** with a `pipeline_run_id`
+    and `202 Accepted`.
+  </Step>
+  <Step title="Poll status">
+    `GET /pipeline/status/{clientOrgId}` until `status` is `completed` or
+    `failed`. One call shows every stage and every document.
+  </Step>
+  <Step title="Fetch data">
+    Read results via list endpoints (`/controls`, `/issues`, `/risk-tags`, …).
+  </Step>
+</Steps>
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as FastAPI
+    participant Q as RabbitMQ / Celery
+    participant DB as Database
+
+    C->>A: POST /ingest/{clientOrgId}
+    A->>DB: create pipeline_run + document registry
+    A->>Q: enqueue pipeline.start
+    A-->>C: 202 { pipeline_run_id }
+
+    loop until terminal status
+        Q->>DB: workers advance stages
+        C->>A: GET /pipeline/status/{clientOrgId}
+        A->>DB: read pipeline_run + steps
+        A-->>C: { status, current_stage, documents, stages }
+    end
+
+    Q->>DB: pipeline status = completed
+    C->>A: GET /issues, /controls, …
+    A-->>C: pipeline output
+```
+
+### Pipeline run status
+
+```json
+{
+  "pipeline_run_id": "uuid",
+  "client_org_id": "uuid",
+  "status": "queued | running | completed | failed",
+  "current_stage": "extract_controls | issues_from_controls | … | complete",
+  "progress_percent": 72,
+  "total_documents": 5,
+  "processed_documents": 3,
+  "failed_documents": 0,
+  "steps": [
+    { "stage": "extract_controls", "status": "completed", "document_id": "uuid" },
+    { "stage": "score_risks", "status": "running", "document_id": null }
+  ]
+}
+```
+
+Full field reference: [Pipeline API](/api-reference/pipeline).
+
+---
+
+## Legacy global job pattern
+
+`POST /controls/extract` and the generic `POST /jobs` (both global,
+non-org-scoped) follow the same three-beat pattern.
 
 <Steps>
   <Step title="Start">
@@ -90,16 +163,26 @@ a live progress bar.
 
 ## Job types
 
-| Job type | Started by | What it produces |
-| --- | --- | --- |
-| `extract_controls` | `POST /control-documents/extract/{orgId}` | `controls` rows from org PDFs |
-| `issues_from_controls` | `POST /issues/from-controls/{orgId}` | `issues` synthesised from controls |
-| `classify_issues` | `POST /issues/classify` (or auto after issues) | PESTEL / SWOT / TVRA classifications |
-| `risk_discovery` | `POST /risk-discovery/run` | `candidate_risks` matched to the library |
-| `score_risks` | `POST /risk-scoring/run` | `risk_assessments` (inherent + residual) |
-| `risk_tagging` | `POST /risk-tagging/run` | `risk_tags` recommendations (process / function / KPI / region / control family) |
-| `risk_owner_assignment` | `POST /risk-assignments/run` | `risk_assignments` owner recommendations with alternates |
-| `reindex_org` | `POST /chatbot/reindex` | Rebuild the Milvus vector knowledge index for one org (Stage 11) |
+These job types map to pipeline stages. All of them now run **only** inside
+the automated `/ingest` pipeline as Celery tasks (`iso_robot.pipeline.tasks`) —
+the org-scoped manual start endpoints that used to trigger them individually
+have been **removed**.
+
+| Job type | Pipeline stage | Removed manual endpoint | What it produces |
+| --- | --- | --- | --- |
+| `extract_controls` | 2 | ~~`POST /control-documents/extract/{orgId}`~~ | `controls` rows from org PDFs |
+| `issues_from_controls` | 3 | ~~`POST /issues/from-controls/{orgId}`~~ | `issues` synthesised from controls |
+| `classify_issues` | 4 | ~~`POST /issues/classify`~~ | PESTEL / SWOT / TVRA classifications |
+| `generate_charts` | 5 | *(pipeline only)* | Chart snapshot from `aggregate_classifications` |
+| `risk_discovery` | 6 | ~~`POST /risk-discovery/run`~~ | `candidate_risks` matched to the library |
+| `score_risks` | 7 | ~~`POST /risk-scoring/run`~~ | `risk_assessments` **and** auto-created `risks` rows |
+| `risk_tagging` | 8 | ~~`POST /risk-tagging/run`~~ | `risk_tags`, auto-applied above the confidence threshold |
+| `risk_owner_assignment` | 9 | ~~`POST /risk-assignments/run`~~ | Owner recommendations, auto-applied to `risks.owner_user_id` above the confidence threshold |
+| `reindex_org` | — | `POST /chatbot/reindex` (still available; not part of `/ingest`) | Milvus knowledge index (Stage 11) |
+
+The two still-existing legacy job types — `extract_controls` via
+`POST /controls/extract`, and any type via the generic `POST /jobs` — are
+**global** (not scoped to a `client_org_id`) and intended for debugging only.
 
 ## Chained jobs
 
@@ -125,7 +208,8 @@ flowchart LR
 - Failures are captured in the job's `error` field for inspection.
 
 <Tip>
-**Poll job vs. fetch data are different questions.** Polling `/jobs/{id}` tells you
-the *worker's* status. Hitting a list endpoint (`/controls`, `/issues`, …) tells
-you what's *in the database right now*. During a run, use both.
+**Automated vs legacy polling.** Use `GET /pipeline/status/{clientOrgId}` for the
+full org pipeline. Use `GET /jobs/{id}` only for the two remaining global,
+non-org-scoped debug endpoints. During a run, list endpoints (`/controls`,
+`/issues`) show what's in the database right now.
 </Tip>

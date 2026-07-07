@@ -33,8 +33,8 @@ complete **paper trail** so every result can be defended.
 
 <CardGroup cols={2}>
   <Card title="Documents in" icon="file-arrow-up">
-    Upload the policies, standards, and regulations the organisation already
-    follows.
+    Send policies, standards, and regulations via a single ingest call — or upload
+    them manually for stage-by-stage runs.
   </Card>
   <Card title="Requirements out" icon="list-check">
     Every auditable obligation is extracted automatically — with its source page.
@@ -51,11 +51,13 @@ complete **paper trail** so every result can be defended.
 
 ```mermaid
 flowchart LR
-    D[📄 Documents] --> C[✅ Requirements<br/>'controls']
+    IN[📥 Ingest API] --> D[📄 Documents]
+    D --> C[✅ Requirements<br/>'controls']
     C --> I[⚠️ Risk issues]
     I --> CL[📊 Analysis<br/>PESTEL / SWOT / TVRA]
     I --> CR[🔎 Candidate risks]
     CR --> RA[📈 Scored risks<br/>inherent + residual]
+    RA --> TG[🏷️ Risk tags]
     RA --> P[📋 Risk register]
     P --> CB[💬 Chatbot<br/>ask anything]
 ```
@@ -96,12 +98,22 @@ toggles that let you switch between the plain-English view and the technical det
     New to the terminology? Keep the [Glossary](/process/glossary) open in a tab.
   </Tab>
   <Tab title="Engineering & integration">
-    Jump to [API Conventions](/api-reference/conventions) and the endpoint pages.
-    Every call up to the **Risks Portal** is documented: method, path, auth,
-    request body, and response shape. Each pipeline stage page also lists the exact
-    endpoints it uses.
+    Start with the [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline)
+    — one `POST /ingest/{clientOrgId}` to start processing and
+    `GET /pipeline/status/{clientOrgId}` to poll progress. Then see
+    [Pipeline API](/api-reference/pipeline) and [API Conventions](/api-reference/conventions).
+
+    Legacy per-stage endpoints remain documented for debugging and manual runs.
   </Tab>
 </Tabs>
+
+## The journey
+
+<Note>
+**Fast path:** [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline) runs
+stages 03–10 automatically after `POST /ingest/{clientOrgId}`. The numbered stages
+below describe the same work in detail and cover manual/debug flows.
+</Note>
 
 ## The journey in eleven stages
 
@@ -115,8 +127,8 @@ all line up.
     → [Authentication](/flow/01-authentication)
   </Step>
   <Step title="Onboard documents" icon="folder-open">
-    Add the organisation profile and upload its control documents.
-    → [Organisation & Documents](/flow/02-org-documents)
+    Ingest via `POST /ingest/{orgId}` (automatic pipeline) or upload manually.
+    → [Automated Ingest](/flow/00-automated-ingest-pipeline) · [Org & Documents](/flow/02-org-documents)
   </Step>
   <Step title="Extract requirements" icon="clipboard-check">
     Turn PDFs into structured, page-referenced requirements.
@@ -145,8 +157,9 @@ all line up.
 </Steps>
 
 <Tip>
-Short on time? The single best page to understand the whole system is the
-[End-to-End Flow](/process/end-to-end-flow) — one diagram, one checklist.
+Short on time? Read [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline)
+for the two-endpoint integration, or [End-to-End Flow](/process/end-to-end-flow)
+for the full map including manual and approval stages.
 </Tip>
 
 <Note>

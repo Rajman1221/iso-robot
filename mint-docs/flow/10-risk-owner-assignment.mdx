@@ -4,11 +4,22 @@ description: "Recommend and record the accountable owner for every risk, using t
 icon: "user-check"
 ---
 
+<Warning>
+The manual trigger `POST /risk-assignments/run` described on this page has been
+**removed**. This stage now only runs automatically as the final step of
+`POST /ingest/{clientOrgId}`, right after risk tagging, with `auto_apply=true` —
+high-confidence owner matches are applied to `risks.owner_user_id` immediately
+rather than waiting for analyst approval. Lower-confidence matches still land
+as `proposed`/`needs_review` for `POST /risk-assignments/apply-selected`.
+See [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
+</Warning>
+
 <Note>
 **In plain English:** a risk without an owner is nobody's problem. This stage
 looks at what each risk is tagged to, walks the organisation hierarchy, and
 proposes the person best placed to own it — explaining *why* — so an analyst can
-make ownership official with one approval.
+make ownership official with one approval (unless it was already auto-applied
+by the automated pipeline for high-confidence matches).
 </Note>
 
 <CardGroup cols={2}>
@@ -101,9 +112,9 @@ registered users plus the function/process owners discovered in the catalogs
 | --- | --- | --- | --- |
 | `GET` | `/risks/unassigned` | Bearer | Work queue: risks without an owner |
 | `GET` | `/organisation-hierarchy/{orgId}` | Bearer | The hierarchy snapshot used for matching |
-| `POST` | `/risk-assignments/run` | Bearer | Start the `risk_owner_assignment` job |
+| ~~`POST`~~ | ~~`/risk-assignments/run`~~ | — | **Removed** — owner assignment now runs automatically inside `/ingest` |
 | `GET` | `/risk-assignments` | Bearer | Read owner recommendations + alternates |
-| `POST` | `/risk-assignments/apply-selected` | Bearer | Record analyst-approved ownership |
+| `POST` | `/risk-assignments/apply-selected` | Bearer | Apply analyst-approved ownership not already auto-applied |
 | `GET` | `/risk-assignments/kpis` | Bearer | Ownership coverage + high-priority gaps |
 
 Full request/response detail:

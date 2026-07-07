@@ -4,6 +4,14 @@ description: "Synthesise risk issues from clusters of related controls, then cla
 icon: "triangle-exclamation"
 ---
 
+<Warning>
+The manual triggers `POST /issues/from-controls/{orgId}` and `POST /issues/classify`
+described on this page have been **removed**. Both now only run automatically
+as part of `POST /ingest/{clientOrgId}` — see
+[Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline). The rest of
+this page still describes the underlying synthesis/classification logic accurately.
+</Warning>
+
 <Note>
 **In plain English:** a single rule rarely is a risk on its own. This step groups
 related rules together and asks "what could go wrong here?" — turning dozens of
@@ -87,9 +95,9 @@ classification work — and the UI can show each job's progress independently. S
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/issues/from-controls/{orgId}` | Bearer | Start `issues_from_controls` (+ optional classify) |
-| `POST` | `/issues/classify` | Bearer | Start `classify_issues` for specific/all issues |
-| `GET` | `/jobs/{jobId}` | Bearer | Poll either job |
+| ~~`POST`~~ | ~~`/issues/from-controls/{orgId}`~~ | — | **Removed** — runs automatically inside `/ingest` |
+| ~~`POST`~~ | ~~`/issues/classify`~~ | — | **Removed** — runs automatically inside `/ingest` |
+| `GET` | `/issues?client_org_id=…` | Bearer | List issues (`include_classification=true` to embed) |
 | `GET` | `/issues?client_org_id=…` | Bearer | List issues (optionally with classification) |
 | `GET` | `/issues/{issueId}` | Bearer | Get a single issue |
 | `GET` | `/issues/{issueId}/classification` | Bearer | Get an issue's classification |

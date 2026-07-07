@@ -24,6 +24,14 @@ Before anything can be extracted, the organisation needs (a) a business profile
 that contextualises later analysis and (b) at least one **control document** to
 mine. This stage handles both.
 
+<Note>
+**Automated alternative:** `POST /ingest/{clientOrgId}` combines document intake
+with the full pipeline (extraction through risk owner assignment). Set `save_to_storage: true`
+to persist files the same way as the upload endpoint below, or leave it `false` to
+process without keeping files on disk. See
+[Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
+</Note>
+
 ## What happens
 
 The analyst uploads source files — policies, standards, regulations — into the
@@ -60,7 +68,9 @@ flowchart TD
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/control-documents/upload` | Bearer | Upload a control document (multipart) |
+| `POST` | `/ingest/{orgId}` | Bearer | **Recommended** — ingest + auto pipeline (`202`) |
+| `GET` | `/pipeline/status/{orgId}` | Bearer | Poll automated pipeline progress |
+| `POST` | `/control-documents/upload` | Bearer | Legacy upload only (multipart) |
 | `GET` | `/control-documents/{orgId}` | Bearer | List uploaded documents for an org |
 | `GET` | `/control-documents/stats/{orgId}` | Bearer | Quick counts (documents, controls) |
 | `GET` | `/orgs` | Bearer | List organisations |
@@ -120,8 +130,10 @@ more relevant analysis later.
 
 ## What feeds the next stage
 
-Once the org has at least one PDF (confirm with the list/stats endpoints), it is
-ready for [Stage 03 · Extract Controls](/flow/03-extract-controls), which reads
-exactly these documents.
+If you used **manual upload**, confirm at least one PDF with the list/stats
+endpoints, then proceed to [Stage 03 · Extract Controls](/flow/03-extract-controls).
 
-Full request/response detail: [API Reference → Organisation & Documents](/api-reference/org-documents).
+If you used **`POST /ingest/{orgId}`**, stages 03–10 run automatically — poll
+[Pipeline status](/api-reference/pipeline#get-pipeline-status) until complete.
+
+Full request/response detail: [Organisation & Documents](/api-reference/org-documents) · [Pipeline API](/api-reference/pipeline).

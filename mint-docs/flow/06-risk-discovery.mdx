@@ -4,6 +4,13 @@ description: "Match the organisation's issues against a seeded risk library usin
 icon: "magnifying-glass-chart"
 ---
 
+<Warning>
+The manual trigger `POST /risk-discovery/run` described on this page has been
+**removed**. This stage now only runs automatically as part of
+`POST /ingest/{clientOrgId}` — see [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
+The rest of this page still describes the underlying matching logic accurately.
+</Warning>
+
 <Note>
 **In plain English:** the system compares the organisation's risk themes against a
 library of risks seen across the industry, and suggests which known risks apply —
@@ -82,7 +89,8 @@ flowchart TD
 | --- | --- | --- | --- |
 | `POST` | `/risk-library/seed-from-poc` | Bearer | One-time library seed (sync) |
 | `GET` | `/risk-library` | Bearer | List the risk catalogue |
-| `POST` | `/risk-discovery/run` | Bearer | Start the `risk_discovery` job |
+| ~~`POST`~~ | ~~`/risk-discovery/run`~~ | — | **Removed** — runs automatically inside `/ingest` |
+| `GET` | `/candidate-risks` | Bearer | List candidates with latest match metadata |
 | `GET` | `/jobs/{jobId}` | Bearer | Poll job status |
 | `GET` | `/candidate-risks` | Bearer | List discovered candidate risks |
 | `GET` | `/discovery-export` | Bearer | Full discovery export bundle |

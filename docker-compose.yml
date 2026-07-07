@@ -1,35 +1,130 @@
+x-pipeline-worker: &pipeline-worker
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: iso-robot-api:latest
+  env_file:
+    - .env
+  environment: &pipeline-worker-env
+    DATABASE_PATH: /app/backend/data/db.sqlite
+    DOCUMENTS_DIR: /app/all-docs
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # Empty DB_URI falls back to the SQLite file above. Point it at Postgres for
+    # real worker concurrency, e.g.:
+    #   postgresql+asyncpg://iso_robot:iso_robot@postgres:5432/iso_robot
+    DB_URI: ${DB_URI:-}
+    CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://iso_robot:iso_robot@rabbitmq:5672//}
+    CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    MILVUS_URI: ${MILVUS_URI:-http://milvus-standalone:19530}
+    MILVUS_TOKEN: ${MILVUS_TOKEN:-}
+    # Shared by api + workers via ./backend/data mount — required for save_to_storage=false ingest.
+    PIPELINE_INGEST_TEMP_DIR: /app/backend/data/ingest-tmp
+  volumes:
+    - ./backend/data:/app/backend/data
+    - ./data:/app/data
+    - ./all-docs:/app/all-docs
+    - "./ISO ROBOT RISK POC.xlsx:/app/ISO ROBOT RISK POC.xlsx:ro"
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: iso-robot-api:latest
+    <<: *pipeline-worker
     container_name: iso-robot-api
     ports:
       - "${API_PORT:-8000}:8000"
-    # Optional secrets/config: copy .env.docker.example to .env (or backend/.env).
-    env_file:
-      - .env
     environment:
-      DATABASE_PATH: /app/backend/data/db.sqlite
-      DOCUMENTS_DIR: /app/all-docs
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      <<: *pipeline-worker-env
       # Set to "true" on first boot to create demo orgs/users (idempotent).
       RUN_SEED_DEMO: ${RUN_SEED_DEMO:-false}
-      # Milvus vector DB (per-org knowledge index for the chatbot). The app
-      MILVUS_URI: ${MILVUS_URI:-http://milvus-standalone:19530}
-      MILVUS_TOKEN: ${MILVUS_TOKEN:-}
-    volumes:
-      # SQLite DB + per-org upload folders persist here.
-      - ./backend/data:/app/backend/data
-      # Curated CSV and other repo data (read/write for seed endpoints).
-      - ./data:/app/data
-      # Optional document scan folder (PDFs/HTML).
-      - ./all-docs:/app/all-docs
-      # POC workbook for seed-from-poc endpoints (host file overrides image copy).
-      - "./ISO ROBOT RISK POC.xlsx:/app/ISO ROBOT RISK POC.xlsx:ro"
     depends_on:
-      - milvus-standalone
+      milvus-standalone:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Automated pipeline: one Celery worker per queue so pools scale independently ──
+  # pipeline.orchestrator — ingest_register / fan-out / pipeline_complete|failed (cheap)
+  # pipeline.extract      — control extraction (Azure DI + LLM, CPU/IO heavy)
+  # pipeline.llm          — issues/classify/charts/discovery/tagging (LLM-bound)
+  # pipeline.scoring      — risk scoring
+  worker-orchestrator:
+    <<: *pipeline-worker
+    container_name: iso-robot-worker-orchestrator
+    command: celery -A iso_robot.celery_app worker -Q pipeline.orchestrator -c 4 --loglevel=INFO -n orchestrator@%h
+
+  worker-extract:
+    <<: *pipeline-worker
+    container_name: iso-robot-worker-extract
+    command: celery -A iso_robot.celery_app worker -Q pipeline.extract -c 4 --loglevel=INFO -n extract@%h
+
+  worker-llm:
+    <<: *pipeline-worker
+    container_name: iso-robot-worker-llm
+    command: celery -A iso_robot.celery_app worker -Q pipeline.llm -c 4 --loglevel=INFO -n llm@%h
+
+  worker-scoring:
+    <<: *pipeline-worker
+    container_name: iso-robot-worker-scoring
+    command: celery -A iso_robot.celery_app worker -Q pipeline.scoring -c 2 --loglevel=INFO -n scoring@%h
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: iso-robot-rabbitmq
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-iso_robot}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-iso_robot}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: iso-robot-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Optional local Postgres — point DB_URI at this to move off SQLite (recommended
+  # once more than one Celery worker writes concurrently). Not wired in by default;
+  # the app falls back to the SQLite file under ./backend/data.
+  postgres:
+    image: postgres:16-alpine
+    container_name: iso-robot-postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-iso_robot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iso_robot}
+      POSTGRES_DB: ${POSTGRES_DB:-iso_robot}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iso_robot}"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
     restart: unless-stopped
 
   docs:
@@ -109,3 +204,6 @@ volumes:
   etcd_data:
   minio_data:
   milvus_data:
+  rabbitmq_data:
+  redis_data:
+  postgres_data:

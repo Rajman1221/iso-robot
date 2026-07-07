@@ -4,12 +4,22 @@ description: "Connect every risk in the register to the business — process, fu
 icon: "tags"
 ---
 
+<Warning>
+The manual trigger `POST /risk-tagging/run` described on this page has been
+**removed**. This stage now only runs automatically as part of
+`POST /ingest/{clientOrgId}`, with `auto_apply=true` — high-confidence tags are
+applied immediately rather than waiting for analyst approval. Lower-confidence
+tags still land as `proposed`/`needs_review` for `POST /risk-tagging/apply-selected`.
+See [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
+</Warning>
+
 <Note>
 **In plain English:** a risk that says "regulatory reporting may be late" is only
 useful if the organisation knows *which process* it threatens, *which function*
 should care, and *which KPI* it will hurt. This stage proposes those connections
 automatically, shows its working, and lets an analyst approve them before
-anything becomes official.
+anything becomes official (unless it was already auto-applied by the automated
+pipeline for high-confidence matches).
 </Note>
 
 <CardGroup cols={2}>
@@ -121,9 +131,9 @@ and the job that produced them, so every tag on the register is explainable.
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/risks/untagged` | Bearer | Work queue: untagged / partially tagged risks |
-| `POST` | `/risk-tagging/run` | Bearer | Start the `risk_tagging` job (returns `job_id`) |
+| ~~`POST`~~ | ~~`/risk-tagging/run`~~ | — | **Removed** — tagging now runs automatically inside `/ingest` |
 | `GET` | `/risk-tags` | Bearer | Read recommendations with confidence + rationale |
-| `POST` | `/risk-tagging/apply-selected` | Bearer | Apply analyst-approved tags to the register |
+| `POST` | `/risk-tagging/apply-selected` | Bearer | Apply analyst-approved tags not already auto-applied |
 | `GET` | `/risk-tagging/kpis` | Bearer | Tagging completeness KPIs |
 
 Full request/response detail: [API Reference → Risk Tagging](/api-reference/risk-tagging).

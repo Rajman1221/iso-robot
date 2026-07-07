@@ -83,9 +83,19 @@ icon: "circle-question"
     the token on the `Authorization` header for every protected call. See
     [Authentication](/api-reference/authentication).
   </Accordion>
-  <Accordion title="How do I know when a job finished?" icon="gears">
-    Poll `GET /jobs/{jobId}` until `status` is `completed` or `failed`. Details on
-    the [Jobs](/api-reference/jobs) page.
+  <Accordion title="How do I know when processing finished?" icon="gears">
+    **Automated pipeline:** poll `GET /pipeline/status/{clientOrgId}` until
+    `status` is `completed` or `failed`. See
+    [Pipeline API](/api-reference/pipeline).
+
+    **Legacy global jobs** (`POST /controls/extract`, `POST /jobs` — debugging
+    only, not org-scoped): poll `GET /jobs/{jobId}`. See [Jobs](/api-reference/jobs).
+  </Accordion>
+  <Accordion title="Can I ingest documents without storing them on disk?" icon="cloud-arrow-up">
+    Yes. `POST /ingest/{clientOrgId}` defaults to `save_to_storage: false` — the
+    file is fingerprinted and processed, but not persisted to the org folder. Pass
+    `save_to_storage: true` when you need the legacy upload behaviour. See
+    [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
   </Accordion>
 </AccordionGroup>
 

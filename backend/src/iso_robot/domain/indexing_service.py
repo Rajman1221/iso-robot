@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Sequence
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.domain.embedding_service import embed_texts, is_embedding_configured
@@ -71,7 +71,7 @@ class IndexingService:
         self,
         settings: Settings,
         vector_repo: VectorRepository,
-        conn: Optional[aiosqlite.Connection] = None,
+        conn: Optional[AsyncSession] = None,
     ) -> None:
         self._settings = settings
         self._vectors = vector_repo
@@ -545,7 +545,7 @@ def _aggregate_text(classifications: Sequence[Dict[str, Any]]) -> str:
 
 
 def build_indexing_service(
-    settings: Settings, conn: Optional[aiosqlite.Connection] = None
+    settings: Settings, conn: Optional[AsyncSession] = None
 ) -> IndexingService:
     """Construct an IndexingService with a fresh Milvus-backed vector repo.
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import BackgroundTasks, Depends, Query
 
 from iso_robot.deps import (
@@ -49,7 +49,7 @@ def _now_iso() -> str:
 # ── API 6.1: List Unassigned Risks ────────────────────────────────────────────
 
 async def list_unassigned_risks(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     current_user: Annotated[dict, Depends(get_current_user)],
     client_org_id: str = Query(...),
@@ -97,7 +97,7 @@ async def list_unassigned_risks(
 async def run_risk_assignment(
     body: RiskAssignmentRunRequest,
     background_tasks: BackgroundTasks,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     jobs: Annotated[JobRepository, Depends(get_job_repo)],
     audit_repo: Annotated[AuditLogRepository, Depends(get_audit_repo)],
@@ -193,7 +193,7 @@ async def run_risk_assignment(
 # ── API 6.3: List Risk Owner Assignment Recommendations ───────────────────────
 
 async def list_risk_assignments(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     current_user: Annotated[dict, Depends(get_current_user)],
     client_org_id: str = Query(...),
@@ -256,7 +256,7 @@ async def list_risk_assignments(
 
 async def apply_selected_assignments(
     body: ApplySelectedAssignmentsRequest,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     audit_repo: Annotated[AuditLogRepository, Depends(get_audit_repo)],
     current_user: Annotated[dict, Depends(get_current_user)],
@@ -432,7 +432,7 @@ async def apply_selected_assignments(
 # ── API 6.5: Get Risk Assignment KPIs ─────────────────────────────────────────
 
 async def risk_assignment_kpis(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     current_user: Annotated[dict, Depends(get_current_user)],
     client_org_id: str = Query(...),
@@ -518,7 +518,7 @@ async def risk_assignment_kpis(
 
 async def get_organisation_hierarchy(
     org_id: str,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     current_user: Annotated[dict, Depends(get_current_user)],
     snapshot_id: Optional[str] = Query(default=None),

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import BackgroundTasks, Depends, File, Query, UploadFile, Body
 
 from iso_robot.config import Settings
@@ -52,7 +52,7 @@ def _issue_list_item_from_row(r: dict, *, classification: Optional[dict[str, Any
 
 
 async def list_issues(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = 2000,
     offset: int = 0,
     include_classification: bool = Query(True, description="Embed latest classification JSON per issue."),
@@ -81,7 +81,7 @@ async def list_issues(
 
 async def get_issue(
     issue_id: str,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     include_classification: bool = Query(True),
 ) -> IssueListItem:
     issues = IssueRepository(db)
@@ -97,7 +97,7 @@ async def get_issue(
 
 
 async def seed_issues_from_poc(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_app_settings)],
     path: Optional[str] = None,
 ) -> SeedPocResponse:
@@ -149,7 +149,7 @@ async def classify_issues(
 
 async def get_issue_classification(
     issue_id: str,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> IssueClassificationResponse:
     issues = IssueRepository(db)
     row = await issues.get_by_id(issue_id)
@@ -168,7 +168,7 @@ async def get_issue_classification(
 
 
 async def import_issues_csv(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     file: UploadFile = File(..., description="CSV with columns: title (required), body, region_hint"),
 ) -> IssuesImportResponse:
     raw = await file.read()
@@ -180,7 +180,7 @@ async def import_issues_csv(
 
 async def issue_stats_for_org(
     client_org_id: str,
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
 ) -> ApiResponse:
     """Per-org counts: issues, and the distinct source documents that produced them."""

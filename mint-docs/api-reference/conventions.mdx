@@ -5,8 +5,10 @@ icon: "book-open"
 ---
 
 The ISO Robot API is a single versioned REST surface. This page covers the rules
-that apply everywhere; the following pages document each endpoint group in
-pipeline order, up to the **Risks Portal**.
+that apply everywhere; the following pages document each endpoint group.
+
+**Recommended integration:** [Automated Pipeline](/api-reference/pipeline) —
+`POST /ingest/{clientOrgId}` plus `GET /pipeline/status/{clientOrgId}`.
 
 ## Base URL
 
@@ -76,14 +78,18 @@ Every error uses the same body:
 | 409 | `DUPLICATE_RECORD` | Slug / email already taken |
 | 422 | `validation_error` | Invalid request body |
 
-## Background jobs
+## Background jobs & pipeline runs
 
-Long-running endpoints return a job immediately and do the work asynchronously.
-The pattern — start, poll `GET /jobs/{jobId}`, then read the data — is identical
-across extraction, classification, discovery, and scoring. It is documented once
-in [Background Jobs](/process/background-jobs) and referenced from each job
-endpoint. The jobs endpoints themselves are on the [Jobs](/api-reference/jobs)
-page.
+Long-running work is asynchronous. Two polling models exist:
+
+| Model | Start | Poll | Use when |
+| --- | --- | --- | --- |
+| **Automated pipeline** | `POST /ingest/{clientOrgId}` | `GET /pipeline/status/{clientOrgId}` | The only path for the org-scoped risk workflow (production ingest, webhooks) |
+| **Legacy global jobs** | `POST /controls/extract` or generic `POST /jobs` (not org-scoped) | `GET /jobs/{jobId}` | Low-level debugging only — the org-scoped per-stage trigger endpoints have been removed |
+
+The automated pipeline is documented in [Pipeline API](/api-reference/pipeline)
+and [Background Jobs](/process/background-jobs). Legacy job endpoints are on
+[Jobs](/api-reference/jobs).
 
 ## Collection variables
 
@@ -94,6 +100,7 @@ capture during a run:
 | --- | --- |
 | `token` | `access_token` from login |
 | `clientOrgId` | `client_org_id` from login |
+| `pipelineRunId` | `pipeline_run_id` from ingest (`202` response) |
 | `documentId` | a control document id |
 | `issueId` | an issue id |
-| `jobId` | a job id returned by any start endpoint |
+| `jobId` | a job id returned by any legacy start endpoint |

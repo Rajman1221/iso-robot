@@ -41,10 +41,14 @@ GET /issues?client_org_id={orgId}&include_classification=true&limit=500
     "client_org_id": "uuid",
     "issue_scope": "internal",
     "origin": "from_controls",
-    "control_ids": ["uuid"]
+    "control_ids": ["uuid"],
+    "confidence": 0.78,
+    "confidence_source": "llm"
   }
 ]
 ```
+
+`confidence` is a 0–1 score reported by the LLM when the issue was derived from controls (`confidence_source: "llm"`). When creation used a heuristic fallback, CSV import, or POC seed, `confidence` is `null` and `confidence_source` is `"heuristic"`. Legacy rows without stored fields return both as `null`.
 
 ---
 
@@ -56,7 +60,7 @@ GET /issues/{issueId}
 
 **Auth:** Bearer
 
-Single issue. `404 not_found` if missing.
+Single issue. Same fields as list items, including `confidence` and `confidence_source`. `404 not_found` if missing.
 
 ---
 

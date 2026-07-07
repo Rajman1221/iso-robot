@@ -13,6 +13,7 @@ from iso_robot.domain.job_service import create_job
 from iso_robot.domain.issues_import import import_issues_from_csv
 from iso_robot.domain.poc_import import default_poc_path
 from iso_robot.domain.poc_seed import seed_risk_sources_and_issues
+from iso_robot.domain.issue_confidence import normalize_llm_confidence
 from iso_robot.errors import APIError
 from iso_robot.repositories.issue_repository import IssueClassificationRepository, IssueRepository
 from iso_robot.repositories.org_repository import OrgRepository
@@ -33,6 +34,9 @@ def _issue_list_item_from_row(r: dict, *, classification: Optional[dict[str, Any
     raw = r.get("raw_payload") if isinstance(r.get("raw_payload"), dict) else {}
     cids = raw.get("control_ids")
     control_ids = [str(x) for x in cids] if isinstance(cids, list) else None
+    raw_confidence = raw.get("confidence")
+    confidence = normalize_llm_confidence(raw_confidence) if raw_confidence is not None else None
+    confidence_source = raw.get("confidence_source") if isinstance(raw.get("confidence_source"), str) else None
     return IssueListItem(
         id=str(r["id"]),
         risk_source_id=r.get("risk_source_id"),
@@ -48,6 +52,8 @@ def _issue_list_item_from_row(r: dict, *, classification: Optional[dict[str, Any
         control_ids=control_ids,
         origin=raw.get("origin") if isinstance(raw.get("origin"), str) else None,
         client_org_id=r.get("client_org_id"),
+        confidence=confidence,
+        confidence_source=confidence_source,
     )
 
 

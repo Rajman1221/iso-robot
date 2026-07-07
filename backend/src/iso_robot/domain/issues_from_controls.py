@@ -7,6 +7,11 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
+from iso_robot.domain.issue_confidence import (
+    CONFIDENCE_SOURCE_HEURISTIC,
+    CONFIDENCE_SOURCE_LLM,
+    normalize_llm_confidence,
+)
 from iso_robot.domain.llm_service import chat_json_object
 from iso_robot.repositories.control_repository import ControlRepository
 from iso_robot.repositories.issue_control_repository import IssueControlRepository
@@ -26,6 +31,7 @@ def _system_prompt() -> str:
         "Return a single JSON object with key 'issues' — an array of objects, each with: "
         "title (short string), body (2–5 sentences), scope ('internal' or 'external'), "
         "sector (short industry/sector label), region_hint (geographic or regional focus if inferable, else null), "
+        "confidence (number 0–1: your confidence that this issue is well-grounded in the cited controls), "
         "control_ids (array of control id strings from the batch only — every id you cite must appear in the input). "
         "Prefer 3–8 issues per batch; merge related controls. Do not invent control_ids."
     )
@@ -65,6 +71,13 @@ def _normalize_llm_issues(raw: Dict[str, Any], valid_ids: set[str]) -> List[Dict
                     control_ids.append(s)
         if not control_ids and valid_ids:
             control_ids = sorted(valid_ids)[: min(5, len(valid_ids))]
+        llm_confidence = normalize_llm_confidence(it.get("confidence"))
+        if llm_confidence is not None:
+            confidence = llm_confidence
+            confidence_source = CONFIDENCE_SOURCE_LLM
+        else:
+            confidence = None
+            confidence_source = CONFIDENCE_SOURCE_HEURISTIC
         out.append(
             {
                 "title": title or "Derived issue",
@@ -73,6 +86,8 @@ def _normalize_llm_issues(raw: Dict[str, Any], valid_ids: set[str]) -> List[Dict
                 "sector": sector,
                 "region_hint": region_hint,
                 "control_ids": control_ids,
+                "confidence": confidence,
+                "confidence_source": confidence_source,
             }
         )
     return out
@@ -93,14 +108,18 @@ def _heuristic_batch(
         head = (texts[0] or "Control cluster").replace("\n", " ")[:90]
         blob = "\n".join(texts).lower()
         scope = "internal" if any(k in blob for k in ("internal audit", "management", "organization", "personnel")) else "external"
+        title = f"Control cluster: {head}"
+        body = joined[:4000] or head
         out.append(
             {
-                "title": f"Control cluster: {head}",
-                "body": joined[:4000] or head,
+                "title": title,
+                "body": body,
                 "scope": scope,
                 "sector": sector_default or "Multi-sector",
                 "region_hint": region_default,
                 "control_ids": ids,
+                "confidence": None,
+                "confidence_source": CONFIDENCE_SOURCE_HEURISTIC,
             }
         )
     return out
@@ -190,6 +209,8 @@ async def run_issues_from_controls_job(
                 "control_ids": control_ids,
                 "scope": iss.get("scope"),
                 "sector": iss.get("sector"),
+                "confidence": iss.get("confidence"),
+                "confidence_source": iss.get("confidence_source"),
             }
             await issue_repo.insert(
                 issue_id=iid,

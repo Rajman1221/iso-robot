@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from iso_robot.domain.issue_confidence import CONFIDENCE_SOURCE_HEURISTIC
 from iso_robot.helpers.slug import slugify
 from iso_robot.repositories.issue_repository import IssueRepository
 
@@ -46,7 +47,12 @@ async def import_issues_from_csv(
                 title=title[:500],
                 body=body[:8000] if body else None,
                 region_hint=region[:200] if region else None,
-                raw_payload={"source": "csv_upload", "row": i},
+                raw_payload={
+                    "source": "csv_upload",
+                    "row": i,
+                    "confidence": None,
+                    "confidence_source": CONFIDENCE_SOURCE_HEURISTIC,
+                },
             )
             created += 1
         except Exception as exc:

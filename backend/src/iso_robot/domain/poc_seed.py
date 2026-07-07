@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from iso_robot.domain.issue_confidence import CONFIDENCE_SOURCE_HEURISTIC
 from iso_robot.domain.poc_import import (
     build_risk_library_seed_entries,
     default_poc_path,
@@ -60,7 +61,12 @@ async def seed_risk_sources_and_issues(
             title=r["name"],
             body=body,
             region_hint=r.get("region"),
-            raw_payload={"seed": "poc_xlsx", "slug": slugify(r["name"])},
+            raw_payload={
+                "seed": "poc_xlsx",
+                "slug": slugify(r["name"]),
+                "confidence": None,
+                "confidence_source": CONFIDENCE_SOURCE_HEURISTIC,
+            },
         )
 
     return {"risk_sources": len(rows), "issues": len(rows), "poc_path": str(path)}

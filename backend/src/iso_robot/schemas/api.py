@@ -83,6 +83,14 @@ class IssueListItem(BaseModel):
     control_ids: Optional[List[str]] = None
     origin: Optional[str] = Field(default=None, description="e.g. from_controls")
     client_org_id: Optional[str] = None
+    confidence: Optional[float] = Field(
+        default=None,
+        description="0–1 LLM-reported creation confidence; null when confidence_source is heuristic.",
+    )
+    confidence_source: Optional[str] = Field(
+        default=None,
+        description="llm when confidence is set; heuristic for fallback/non-LLM creation paths.",
+    )
 
 
 class CandidateRiskListItem(BaseModel):

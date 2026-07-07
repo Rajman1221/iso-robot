@@ -84,8 +84,8 @@ Long-running work is asynchronous. Two polling models exist:
 
 | Model | Start | Poll | Use when |
 | --- | --- | --- | --- |
-| **Automated pipeline** | `POST /ingest/{clientOrgId}` | `GET /pipeline/status/{clientOrgId}` | Production ingest, webhooks |
-| **Legacy jobs** | Per-stage POST (e.g. `/control-documents/extract/{orgId}`) | `GET /jobs/{jobId}` | Debugging, single-stage re-runs |
+| **Automated pipeline** | `POST /ingest/{clientOrgId}` | `GET /pipeline/status/{clientOrgId}` | The only path for the org-scoped risk workflow (production ingest, webhooks) |
+| **Legacy global jobs** | `POST /controls/extract` or generic `POST /jobs` (not org-scoped) | `GET /jobs/{jobId}` | Low-level debugging only — the org-scoped per-stage trigger endpoints have been removed |
 
 The automated pipeline is documented in [Pipeline API](/api-reference/pipeline)
 and [Background Jobs](/process/background-jobs). Legacy job endpoints are on

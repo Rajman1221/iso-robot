@@ -4,6 +4,13 @@ description: "Turn the organisation's PDFs into structured, page-referenced cont
 icon: "clipboard-check"
 ---
 
+<Warning>
+The manual trigger `POST /control-documents/extract/{orgId}` described on this
+page has been **removed**. This stage now only runs automatically as part of
+`POST /ingest/{clientOrgId}` — see [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
+The rest of this page still describes the underlying extraction logic accurately.
+</Warning>
+
 <Note>
 **In plain English:** the system reads every uploaded PDF and pulls out each
 individual rule or requirement — like a highlighter that finds every "must,"
@@ -92,8 +99,7 @@ flowchart TD
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/control-documents/extract/{orgId}` | Bearer | Start the `extract_controls` job |
-| `GET` | `/jobs/{jobId}` | Bearer | Poll job status / progress |
+| ~~`POST`~~ | ~~`/control-documents/extract/{orgId}`~~ | — | **Removed** — runs automatically inside `/ingest` |
 | `GET` | `/controls?client_org_id=…` | Bearer | List extracted controls |
 
 ### Start response

@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c5f74daa-904f-4817-9aaf-a1e7dbd344db",
     "name": "ISO-Robot - API Verification",
-    "description": "# ISO Robot API v1\n\n**Base URL:** `{{baseUrl}}` → must be `http://localhost:8000/api/v1`\n\n## Quick start\n1. Run **01 Auth → Login (Analyst)**\n2. Run folders **02 → 08** in order\n3. Run **09 Risk Tagging** then **10 Risk Owner Assignment** to tag and assign the register\n4. While jobs run, re-hit **11 Fetch Latest Data** to see DB rows grow\n5. Use **Poll job** requests until `status` = `completed`\n\n## End-to-end flow\n```mermaid\nflowchart TD\n    A[Login] --> B[Upload / list org documents]\n    B --> C[Extract controls - JOB]\n    C --> D[GET controls by orgId]\n    D --> E[Issues from controls - JOB]\n    E --> F[Classify issues - JOB]\n    F --> G[PESTEL / SWOT / TVRA aggregate]\n    G --> H[Risk discovery - JOB]\n    H --> I[Risk scoring - JOB]\n    I --> J[GET risk assessment]\n    J --> K[Upload selected risks]\n    K --> L[Risk tagging - JOB]\n    L --> M[Apply selected tags]\n    M --> N[Owner assignment - JOB]\n    N --> O[Apply selected assignments]\n    O --> P[11 · Chatbot — check status]\n    P --> Q[11 · Reindex org knowledge — JOB]\n    Q --> R[11 · Query chatbot — SSE stream]\n\n    classDef job fill:#0E7490,stroke:#22D3EE,color:#fff;\n    class C,E,F,H,I,L,N,Q job;\n```\n\n## Quick start\n1. Run **01 Auth → Login (Analyst)**\n2. Run folders **02 → 08** in order\n3. Run **09 Risk Tagging** then **10 Risk Owner Assignment** to tag and assign the register\n4. While jobs run, re-hit **11 Fetch Latest Data** to see DB rows grow\n5. Use **Poll job** requests until `status` = `completed`\n6. Run **11 Chatbot** — check status, trigger reindex (once), then stream a question\n\n## Authentication\n| Route | Auth |\n|-------|------|\n| `POST /auth/login`, `POST /auth/register`, `GET /health` | **None** |\n| Everything else | `Authorization: Bearer {{token}}` |\n\nLogin saves `token` + `clientOrgId` to collection variables.\n\n## Error format (all endpoints)\n```json\n{ \"detail\": \"Human message\", \"code\": \"ERROR_CODE\" }\n```\n\n| HTTP | code | Meaning |\n|------|------|---------|\n| 401 | UNAUTHORIZED | Missing/invalid Bearer header |\n| 401 | SESSION_INVALID | Expired or bad JWT |\n| 401 | AUTH_FAILED | Wrong username/password |\n| 403 | FORBIDDEN | Org mismatch or not admin |\n| 404 | not_found | Resource missing |\n| 404 | CLIENT_ORG_NOT_FOUND | Bad org id |\n| 409 | DUPLICATE_RECORD | Slug/email taken |\n| 422 | validation_error | Bad request body |\n\n## Job system\nLong work runs in **background jobs**. Pattern:\n\n1. **Start** → POST returns `{ \"id\", \"type\", \"status\": \"pending\", ... }`\n2. **Poll** → `GET /jobs/{jobId}` until `completed` or `failed`\n3. **Fetch data** → GET list endpoints (controls, issues) — rows appear while job runs\n\n| Job type | Started by | What it does |\n|----------|------------|--------------|\n| `extract_controls` | `/control-documents/extract/{orgId}` | Azure DI + LLM → `controls` table |\n| `issues_from_controls` | `/issues/from-controls` | LLM synthesizes issues from controls |\n| `classify_issues` | `/issues/classify` or auto after step above | LLM/heuristic → `issue_classifications` |\n| `risk_discovery` | `/risk-discovery/run` | BM25 + LLM → `candidate_risks` |\n| `score_risks` | `/risk-scoring/run` | LLM + matrix → `risk_assessments` |\n| `risk_tagging` | `/risk-tagging/run` | Catalog matching + LLM → `risk_tags` (Stage 09) |\n| `risk_owner_assignment` | `/risk-assignments/run` | Weighted owner matching → `risk_assignments` (Stage 10) |\n| `reindex_org` | `/chatbot/reindex` | Build / rebuild the Milvus knowledge index for the org (Stage 11) |\n\n## Chatbot SSE note\nThe `/chatbot/query` response is an **SSE stream** (Server-Sent Events). Postman\ndisplays streaming responses natively — you will see `retrieval`, `message`, and `done`\nevents appear in sequence. If you prefer curl: `curl -N -X POST ... -H 'Authorization: Bearer TOKEN' -d '{\"question\":\"...\"}' http://localhost:8000/api/v1/chatbot/query`\n\nJob status values: `pending` → `running` → `completed` | `failed` (see `error` field)\n",
+    "description": "# ISO Robot API v1\n\n**Base URL:** `{{baseUrl}}` → `http://localhost:8000/api/v1`\n**Host root:** `{{stageURL}}` → `http://localhost:8000`\n\n## Quick start (automated pipeline — Docker)\n\n1. Set `VERIFY_MOCK=true` in repo `.env` (see `.env.docker.example`), then `docker compose up --build`\n2. **01 Auth → Login (Analyst)** — saves `token`, `clientOrgId`, and all `external*` vars for pipeline auth\n3. *(One-time if library empty)* **06 Risk Discovery → Seed risk library**\n4. If blocked by `409 PIPELINE_RUN_IN_PROGRESS`, run **Automated Pipeline → Cancel active pipeline run**\n5. **Automated Pipeline → Ingest documents** — attach `backend/fixtures/sample_control.pdf`, returns 202 + `pipelineRunId`\n6. **Automated Pipeline → Pipeline status (latest run)** — re-send until `status` = `completed`\n7. **11 Fetch Latest Data** + **10 Risk Owner Assignment** GETs to verify outputs\n\nRe-import this file from the **repo root** after updates — do not use an old Downloads copy.\n\n## Authentication\n\n| Route | Auth |\n|-------|------|\n| `POST /auth/login`, `GET /health` | **None** |\n| `POST /ingest/{clientOrgId}`, `GET /pipeline/status/{clientOrgId}` | External auth headers (auto-filled by Login when `VERIFY_MOCK=true`) |\n| Everything else | `Authorization: Bearer {{token}}` |\n\nLogin sets: `token`, `clientOrgId`, `externalToken`, `externalUserId`, `externalUserEmail`.\n\n## End-to-end flow\n\n```mermaid\nflowchart TD\n    A[Login] --> B[Ingest PDF]\n    B --> C[\"Poll pipeline status\"]\n    C --> D[Fetch Latest Data GETs]\n    D --> E[Owner recommendations]\n    E --> F[Chatbot optional]\n```\n\n## Error format\n\n```json\n{ \"detail\": \"Human message\", \"code\": \"ERROR_CODE\" }\n```\n\n| HTTP | code | Meaning |\n|------|------|---------|\n| 401 | UNAUTHORIZED | Missing/invalid Bearer header |\n| 403 | FORBIDDEN | Org mismatch |\n| 404 | PIPELINE_RUN_NOT_FOUND | No runs yet or bad pipeline_run_id |\n| 409 | PIPELINE_RUN_IN_PROGRESS | Another ingest still active |\n\n## Remaining job endpoints\n\nChatbot reindex (`POST /chatbot/reindex`) and Reference/Legacy debug endpoints still use the background job pattern: start → poll `GET /jobs/{jobId}`.\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "25305867"
   },
@@ -25,15 +25,10 @@
               }
             ],
             "url": {
-              "raw": "http://157.20.190.175:8000/health",
-              "protocol": "http",
+              "raw": "{{rootUrl}}/health",
               "host": [
-                "157",
-                "20",
-                "190",
-                "175"
+                "{{rootUrl}}"
               ],
-              "port": "8000",
               "path": [
                 "health"
               ]
@@ -57,13 +52,11 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/v1/health",
+              "raw": "{{baseUrl}}/health",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
-                "api",
-                "v1",
                 "health"
               ]
             },
@@ -87,7 +80,13 @@
                   "pm.test('200', () => pm.response.to.have.status(200));",
                   "const d = (pm.response.json().data || pm.response.json());",
                   "pm.collectionVariables.set('token', d.access_token);",
-                  "if (d.client_org_id) pm.collectionVariables.set('clientOrgId', d.client_org_id);"
+                  "if (d.client_org_id) pm.collectionVariables.set('clientOrgId', d.client_org_id);",
+                  "if (d.user_id) pm.collectionVariables.set('externalUserId', d.user_id);",
+                  "pm.collectionVariables.set('externalToken', 'verify-mock-dev');",
+                  "try {",
+                  "  const body = JSON.parse(pm.request.body.raw);",
+                  "  if (body.username) pm.collectionVariables.set('externalUserEmail', body.username);",
+                  "} catch (_) {}"
                 ],
                 "type": "text/javascript",
                 "packages": {},
@@ -145,7 +144,13 @@
                   "pm.test('200', () => pm.response.to.have.status(200));",
                   "const d = (pm.response.json().data || pm.response.json());",
                   "pm.collectionVariables.set('token', d.access_token);",
-                  "if (d.client_org_id) pm.collectionVariables.set('clientOrgId', d.client_org_id);"
+                  "if (d.client_org_id) pm.collectionVariables.set('clientOrgId', d.client_org_id);",
+                  "if (d.user_id) pm.collectionVariables.set('externalUserId', d.user_id);",
+                  "pm.collectionVariables.set('externalToken', 'verify-mock-dev');",
+                  "try {",
+                  "  const body = JSON.parse(pm.request.body.raw);",
+                  "  if (body.username) pm.collectionVariables.set('externalUserEmail', body.username);",
+                  "} catch (_) {}"
                 ],
                 "type": "text/javascript",
                 "packages": {},
@@ -275,7 +280,342 @@
           "response": []
         }
       ],
-      "description": "**Step 1.** Login is public. Saves `token` + `clientOrgId`. All later folders need Bearer token."
+      "description": "**Step 1.** Login is public. Saves `token`, `clientOrgId`, and pipeline external-auth vars (`externalToken`, `externalUserId`, `externalUserEmail`) for **Automated Pipeline** ingest/status. All other folders use Bearer `{{token}}`."
+    },
+    {
+      "name": "Automated Pipeline (Ingest + Status)",
+      "item": [
+        {
+          "name": "Ingest documents (auto pipeline)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 accepted', () => pm.response.to.have.status(202));",
+                  "const d = (pm.response.json() || {}).data || {};",
+                  "if (d.pipeline_run_id) pm.collectionVariables.set('pipelineRunId', d.pipeline_run_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{externalToken}}",
+                "type": "text",
+                "description": "Token issued by the EXISTING backend, not ISO Robot's own JWT ({{token}})."
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{externalUserId}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Email",
+                "value": "{{externalUserEmail}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Org-Id",
+                "value": "{{clientOrgId}}",
+                "type": "text",
+                "description": "Must equal the {clientOrgId} path segment or the request is rejected with 403 FORBIDDEN."
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "type": "file",
+                  "key": "file",
+                  "description": "Select a PDF from your machine. For local testing use backend/fixtures/sample_control.pdf from this repo. Repeat the field to upload multiple PDFs."
+                },
+                {
+                  "type": "text",
+                  "key": "save_to_storage",
+                  "value": "false",
+                  "description": "Optional. Omit to use the server default (PIPELINE_SAVE_TO_STORAGE_DEFAULT)."
+                },
+                {
+                  "type": "text",
+                  "key": "force_reprocess",
+                  "value": "false",
+                  "description": "Optional. true re-runs the pipeline even for a previously-seen (by sha256) document."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{stageURL}}/api/v1/ingest/{{clientOrgId}}",
+              "host": [
+                "{{stageURL}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "ingest",
+                "{{clientOrgId}}"
+              ]
+            },
+            "description": "## Purpose\nThe **single entry point** for the automated pipeline. Uploading here automatically runs: control extraction → issue synthesis → classification → chart aggregation → risk discovery → risk scoring (+ auto-promotion to `risks`) → risk tagging (`auto_apply: true`) → risk owner assignment (`auto_apply: true`).\n\n## PDF file\nUse Postman's file picker to attach a PDF. For Docker/local testing, select `backend/fixtures/sample_control.pdf` from your repo clone.\n\n## Docker note\nEphemeral uploads (`save_to_storage=false`) require `PIPELINE_INGEST_TEMP_DIR=/app/backend/data/ingest-tmp` on api + workers (set in docker-compose).\n\n## Auth\nAuto-filled by **01 Auth → Login** (`externalToken`, `externalUserId`, `externalUserEmail`, `clientOrgId`). Server must have `VERIFY_MOCK=true` for local Docker.\n\n## Then\nPoll **Pipeline status (latest run)** until `status` = `completed` or `failed`."
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel active pipeline run",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const d = (pm.response.json() || {}).data || {};",
+                  "pm.test('cancelled', () => pm.expect(d.status).to.eql('failed'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{externalToken}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{externalUserId}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Email",
+                "value": "{{externalUserEmail}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Org-Id",
+                "value": "{{clientOrgId}}",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{stageURL}}/api/v1/pipeline/cancel/{{clientOrgId}}",
+              "host": [
+                "{{stageURL}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "pipeline",
+                "cancel",
+                "{{clientOrgId}}"
+              ]
+            },
+            "description": "## Purpose\nMark the org's active (`queued`/`running`) pipeline run as **failed** and release the one-active-run-per-org lock.\n\nUse when a run is stuck (e.g. after a worker crash) or you need to retry ingest without waiting.\n\n## Auth\nSame external-backend headers as **Ingest documents** (auto-filled by Login).\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"pipeline_run_id\": \"...\",\n    \"status\": \"failed\",\n    \"error\": \"Cancelled by user\"\n  }\n}\n```\n\n## Errors\n404 `NO_ACTIVE_PIPELINE_RUN` — nothing to cancel\n\n## Then\nRun **Ingest documents** again."
+          },
+          "response": []
+        },
+        {
+          "name": "Pipeline status (latest run)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{externalToken}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{externalUserId}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Email",
+                "value": "{{externalUserEmail}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Org-Id",
+                "value": "{{clientOrgId}}",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{stageURL}}/api/v1/pipeline/status/{{clientOrgId}}",
+              "host": [
+                "{{stageURL}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "pipeline",
+                "status",
+                "{{clientOrgId}}"
+              ]
+            },
+            "description": "## Purpose\nUnified progress for this org's **most recent** ingest run (no `pipeline_run_id` query param). Same external auth as **Ingest documents** above.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"client_org_id\": \"...\",\n    \"pipeline_run_id\": \"uuid\",\n    \"status\": \"queued|running|completed|failed\",\n    \"current_stage\": \"ingest_register|extract_controls|issues_from_controls|classify_issues|generate_charts|risk_discovery|score_risks|risk_tagging|risk_owner_assignment|complete\",\n    \"save_to_storage\": false,\n    \"force_reprocess\": false,\n    \"total_documents\": 1,\n    \"new_documents\": 1,\n    \"skipped_duplicate_documents\": 0,\n    \"processed_documents\": 1,\n    \"failed_documents\": 0,\n    \"progress_percent\": 100,\n    \"celery_task_id\": \"...\",\n    \"error\": null,\n    \"started_at\": \"...\",\n    \"completed_at\": \"...\",\n    \"created_at\": \"...\",\n    \"steps\": [\n      { \"stage\": \"extract_controls\", \"status\": \"completed\", \"document_id\": \"...\", \"filename\": \"policy.pdf\", \"error\": null, \"started_at\": \"...\", \"completed_at\": \"...\" }\n    ]\n  }\n}\n```\n\n## Errors\n401/403 (same as ingest) · 404 CLIENT_ORG_NOT_FOUND · 404 PIPELINE_RUN_NOT_FOUND (no runs yet for this org — POST /ingest first)"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json() || {};",
+                  "const d = body.data || body;",
+                  "const status = d.status || 'unknown';",
+                  "console.log('Pipeline status:', status);",
+                  "if (d.current_stage) console.log('Current stage:', d.current_stage);",
+                  "if (d.stages) {",
+                  "  d.stages.forEach(s => console.log('  stage', s.stage + ':', s.status));",
+                  "}",
+                  "if (d.documents) {",
+                  "  d.documents.forEach(doc => {",
+                  "    console.log('  doc', doc.filename || doc.document_id + ':', doc.status);",
+                  "    if (doc.steps) doc.steps.forEach(st => console.log('    ', st.stage + ':', st.status));",
+                  "  });",
+                  "}",
+                  "if (status === 'queued' || status === 'running') {",
+                  "  console.log('Re-send this request until status is completed or failed.');",
+                  "}",
+                  "if (status === 'failed' && d.error) console.log('Error:', d.error);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pipeline status (specific run)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{externalToken}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Id",
+                "value": "{{externalUserId}}",
+                "type": "text"
+              },
+              {
+                "key": "X-User-Email",
+                "value": "{{externalUserEmail}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Org-Id",
+                "value": "{{clientOrgId}}",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{stageURL}}/api/v1/pipeline/status/{{clientOrgId}}?pipeline_run_id={{pipelineRunId}}",
+              "host": [
+                "{{stageURL}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "pipeline",
+                "status",
+                "{{clientOrgId}}"
+              ],
+              "query": [
+                {
+                  "key": "pipeline_run_id",
+                  "value": "{{pipelineRunId}}"
+                }
+              ]
+            },
+            "description": "## Purpose\nSame as **Pipeline status (latest run)**, but pinned to one run via `?pipeline_run_id=` — `{{pipelineRunId}}` is captured automatically by the **Ingest documents** request's test script. Useful once a second ingest has started (so 'latest' would point elsewhere) or to re-check a historical run.\n\n404 PIPELINE_RUN_NOT_FOUND if the run doesn't belong to `{{clientOrgId}}`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json() || {};",
+                  "const d = body.data || body;",
+                  "const status = d.status || 'unknown';",
+                  "console.log('Pipeline run', pm.collectionVariables.get('pipelineRunId') + ':', status);",
+                  "if (d.current_stage) console.log('Current stage:', d.current_stage);",
+                  "if (d.stages) {",
+                  "  d.stages.forEach(s => console.log('  stage', s.stage + ':', s.status));",
+                  "}",
+                  "if (status === 'queued' || status === 'running') {",
+                  "  console.log('Re-send this request until status is completed or failed.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "description": "**Recommended path — replaces manual Steps 3-10.** One authenticated upload runs the entire workflow (control extraction → issues → classification → charts → risk discovery → scoring with auto-promotion → tagging with auto-apply → owner assignment with auto-apply) end-to-end via Celery/RabbitMQ/Redis.\n\n**Auth:** external-backend headers (`Authorization`, `X-User-Id`, `X-User-Email`, `X-Org-Id`) — auto-filled by **01 Auth → Login**. Requires `VERIFY_MOCK=true` in Docker `.env` for local testing.\n\n**Quick flow:** Login → Ingest (attach PDF) → Poll status until `completed` → 11 Fetch Latest Data.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.collectionVariables.get('clientOrgId')) {",
+              "  console.warn('Run 01 Auth → Login first — clientOrgId is empty.');",
+              "}",
+              "if (!pm.collectionVariables.get('externalUserEmail')) {",
+              "  console.warn('Run 01 Auth → Login first — externalUserEmail is empty.');",
+              "}",
+              "if (!pm.collectionVariables.get('externalToken')) {",
+              "  pm.collectionVariables.set('externalToken', 'verify-mock-dev');",
+              "}"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "02 Org & Control Documents",
@@ -598,121 +938,6 @@
       "name": "03 Extract Controls",
       "item": [
         {
-          "name": "Start control extraction",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const b=pm.response.json(); const id=b.id||(b.data&&b.data.job_id); if(id) pm.collectionVariables.set('jobId',id);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              },
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{stageURL}}/api/v1/control-documents/extract/{{clientOrgId}}",
-              "host": [
-                "{{stageURL}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "control-documents",
-                "extract",
-                "{{clientOrgId}}"
-              ]
-            },
-            "description": "## Purpose\n\nExtract controls from all org PDFs.\n\n### Job behavior\n\n- Returns immediately with `status: pending`\n    \n- Worker runs in background via FastAPI BackgroundTasks\n    \n- Poll **`GET /jobs/{{jobId}}`** until done\n    \n- Re-fetch list endpoints in **09 Fetch Latest Data** while running\n    \n\n## Job type\n\n`extract_controls`\n\n## Response 200\n\n``` json\n{\n  \"status\": \"accepted\",\n  \"data\": { \"job_id\": \"uuid\", \"documents_queued\": 2, \"folder\": \"...\", \"processing_status\": \"in_progress\" }\n}\n\n ```\n\n400 VALIDATION_ERROR (no docs) · 404 CLIENT_ORG_NOT_FOUND\n\n## Then\n\nPoll job → **List controls** (09 or 03)"
-          },
-          "response": []
-        },
-        {
-          "name": "Poll job status",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "console.log('status:', pm.response.json().status);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "GET",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/jobs/{{jobId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "jobs",
-                "{{jobId}}"
-              ]
-            },
-            "description": "## Purpose\n\nCheck background job progress.\n\n## Response 200\n\n``` json\n{\n  \"id\": \"uuid\",\n  \"type\": \"extract_controls\",\n  \"status\": \"pending|running|completed|failed\",\n  \"payload\": {},\n  \"error\": null,\n  \"created_at\": \"...\",\n  \"updated_at\": \"...\"\n}\n\n ```\n\n404 not_found\n\nRepeat until `completed` or `failed`."
-          },
-          "response": []
-        },
-        {
           "name": "List controls (org)",
           "event": [
             {
@@ -772,126 +997,11 @@
           "response": []
         }
       ],
-      "description": "**Step 3.** Start extract job → poll → list controls.\n\n```mermaid\nsequenceDiagram\n  Client->>API: POST extract/{orgId}\n  API-->>Client: job_id\n  loop until completed\n    Client->>API: GET /jobs/{id}\n    Client->>API: GET /controls?client_org_id=\n  end\n```"
+      "description": "Stage 3 — read extracted controls after the automated pipeline. Control extraction is triggered by **Automated Pipeline → Ingest documents**."
     },
     {
       "name": "04 Issues",
       "item": [
-        {
-          "name": "Generate issues from controls",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const b=pm.response.json(); const id=b.id||(b.data&&b.data.job_id); if(id) pm.collectionVariables.set('jobId',id);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              },
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n    \"replace_existing\": false,\n    \"classify_after\": true\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{stageURL}}/api/v1/issues/from-controls/{{clientOrgId}}",
-              "host": [
-                "{{stageURL}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "issues",
-                "from-controls",
-                "{{clientOrgId}}"
-              ]
-            },
-            "description": "## Purpose\nLLM synthesizes issues from extracted controls.\n\n### Job behavior\n- Returns immediately with `status: pending`\n- Worker runs in background via FastAPI BackgroundTasks\n- Poll **`GET /jobs/{{jobId}}`** until done\n- Re-fetch list endpoints in **09 Fetch Latest Data** while running\n\n## Job type\n`issues_from_controls`\n\n## Request\n```json\n{\n  \"document_id\": \"uuid\",\n  \"replace_existing\": true,\n  \"classify_after\": true,\n  \"sector_hint\": null,\n  \"region_hint\": null\n}\n```\n\nIf `classify_after: true`, spawns separate `classify_issues` job.\n\n## Response 200\nJobResponse"
-          },
-          "response": []
-        },
-        {
-          "name": "Poll job status",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "console.log('status:', pm.response.json().status);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "GET",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{stageURL}}/api/v1/jobs/{{jobId}}",
-              "host": [
-                "{{stageURL}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "jobs",
-                "{{jobId}}"
-              ]
-            },
-            "description": "## Purpose\nCheck background job progress.\n\n## Response 200\n```json\n{\n  \"id\": \"uuid\",\n  \"type\": \"extract_controls\",\n  \"status\": \"pending|running|completed|failed\",\n  \"payload\": {},\n  \"error\": null,\n  \"created_at\": \"...\",\n  \"updated_at\": \"...\"\n}\n```\n404 not_found\n\nRepeat until `completed` or `failed`."
-          },
-          "response": []
-        },
         {
           "name": "List issues (org)",
           "event": [
@@ -993,120 +1103,6 @@
           "response": []
         },
         {
-          "name": "Classify issues",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const b=pm.response.json(); const id=b.id||(b.data&&b.data.job_id); if(id) pm.collectionVariables.set('jobId',id);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              },
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n    \"issue_ids\": [\n        \"{{issueId}}\"\n    ]\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{stageURL}}/api/v1/issues/classify",
-              "host": [
-                "{{stageURL}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "issues",
-                "classify"
-              ]
-            },
-            "description": "## Purpose\nRun LLM/heuristic classification → feeds PESTEL charts.\n\n### Job behavior\n- Returns immediately with `status: pending`\n- Worker runs in background via FastAPI BackgroundTasks\n- Poll **`GET /jobs/{{jobId}}`** until done\n- Re-fetch list endpoints in **09 Fetch Latest Data** while running\n\n## Job type\n`classify_issues`\n\n## Request\n`issue_ids` optional — omit to classify all unclassified.\n\n## Response 200\nJobResponse"
-          },
-          "response": []
-        },
-        {
-          "name": "Poll classify job",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "console.log('status:', pm.response.json().status);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "GET",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{stageURL}}/api/v1/jobs/{{jobId}}",
-              "host": [
-                "{{stageURL}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "jobs",
-                "{{jobId}}"
-              ]
-            },
-            "description": "## Purpose\nCheck background job progress.\n\n## Response 200\n```json\n{\n  \"id\": \"uuid\",\n  \"type\": \"extract_controls\",\n  \"status\": \"pending|running|completed|failed\",\n  \"payload\": {},\n  \"error\": null,\n  \"created_at\": \"...\",\n  \"updated_at\": \"...\"\n}\n```\n404 not_found\n\nRepeat until `completed` or `failed`."
-          },
-          "response": []
-        },
-        {
           "name": "Get issue classification",
           "request": {
             "auth": {
@@ -1183,7 +1179,7 @@
           "response": []
         }
       ],
-      "description": "**Step 4.** Issues from controls → classify → list.\n\n`classify_after:true` auto-spawns classify job."
+      "description": "Stage 4 — read issues and classifications after the automated pipeline. Issue generation and classification run automatically via **POST /ingest**."
     },
     {
       "name": "05 Charts (PESTEL / SWOT / TVRA)",
@@ -1375,116 +1371,6 @@
           "response": []
         },
         {
-          "name": "Run risk discovery",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const b=pm.response.json(); const id=b.id||(b.data&&b.data.job_id); if(id) pm.collectionVariables.set('jobId',id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              },
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{baseUrl}}/risk-discovery/run",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "risk-discovery",
-                "run"
-              ]
-            },
-            "description": "## Purpose\nBM25 + LLM: match issues → risk library → candidate_risks.\n\n### Job behavior\n- Returns immediately with `status: pending`\n- Worker runs in background via FastAPI BackgroundTasks\n- Poll **`GET /jobs/{{jobId}}`** until done\n- Re-fetch list endpoints in **09 Fetch Latest Data** while running\n\n## Job type\n`risk_discovery`\n\n## Response 200\nJobResponse"
-          },
-          "response": []
-        },
-        {
-          "name": "Poll job status",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "console.log('status:', pm.response.json().status);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "GET",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/jobs/{{jobId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "jobs",
-                "{{jobId}}"
-              ]
-            },
-            "description": "## Purpose\nCheck background job progress.\n\n## Response 200\n```json\n{\n  \"id\": \"uuid\",\n  \"type\": \"extract_controls\",\n  \"status\": \"pending|running|completed|failed\",\n  \"payload\": {},\n  \"error\": null,\n  \"created_at\": \"...\",\n  \"updated_at\": \"...\"\n}\n```\n404 not_found\n\nRepeat until `completed` or `failed`."
-          },
-          "response": []
-        },
-        {
           "name": "List candidate risks",
           "request": {
             "auth": {
@@ -1561,125 +1447,11 @@
           "response": []
         }
       ],
-      "description": "**Step 6.** Seed library (once) → discovery job → candidate risks."
+      "description": "Stage 6 — seed risk library (one-time) and read candidate risks. Discovery runs automatically via **POST /ingest** after library is seeded."
     },
     {
       "name": "07 Risk Scoring",
       "item": [
-        {
-          "name": "Run risk scoring",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const b=pm.response.json(); const id=b.id||(b.data&&b.data.job_id); if(id) pm.collectionVariables.set('jobId',id);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              },
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n    \"issue_ids\": [\n        \"{{issueId}}\"\n    ]\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/risk-scoring/run",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "risk-scoring",
-                "run"
-              ]
-            },
-            "description": "## Purpose\nLLM judgment + deterministic matrix → inherent/residual risk.\n\n### Job behavior\n- Returns immediately with `status: pending`\n- Worker runs in background via FastAPI BackgroundTasks\n- Poll **`GET /jobs/{{jobId}}`** until done\n- Re-fetch list endpoints in **09 Fetch Latest Data** while running\n\n## Job type\n`score_risks`\n\n## Request\n```json\n{ \"issue_ids\": [\"uuid\"], \"controls\": [\"optional control text\"] }\n```\n\n## Response 200\nJobResponse\n403 FORBIDDEN if issue not in user's org"
-          },
-          "response": []
-        },
-        {
-          "name": "Poll job status",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "console.log('status:', pm.response.json().status);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "GET",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/jobs/{{jobId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "jobs",
-                "{{jobId}}"
-              ]
-            },
-            "description": "## Purpose\nCheck background job progress.\n\n## Response 200\n```json\n{\n  \"id\": \"uuid\",\n  \"type\": \"extract_controls\",\n  \"status\": \"pending|running|completed|failed\",\n  \"payload\": {},\n  \"error\": null,\n  \"created_at\": \"...\",\n  \"updated_at\": \"...\"\n}\n```\n404 not_found\n\nRepeat until `completed` or `failed`."
-          },
-          "response": []
-        },
         {
           "name": "Get risk assessment",
           "request": {
@@ -1719,7 +1491,7 @@
           "response": []
         }
       ],
-      "description": "**Step 7.** Score risks job → read assessment.\n\nRequires Azure OpenAI configured."
+      "description": "Stage 7 — read risk assessments. Scoring (+ auto-promotion to `risks`) runs automatically via **POST /ingest**."
     },
     {
       "name": "08 Risks Portal",
@@ -1771,7 +1543,7 @@
                 "upload-selected"
               ]
             },
-            "description": "## Purpose\nPortal: persist user-selected risks to `risks` table.\n\n## Response 200\nApiResponse with created risk ids."
+            "description": "## Purpose\nPortal: persist user-selected risks to `risks` table.\n\n**Note:** the automated pipeline (`POST /ingest/{clientOrgId}`) now does this step for you automatically after scoring — this manual endpoint remains for human-curated/ad-hoc risk entry.\n\n## Response 200\nApiResponse with created risk ids."
           },
           "response": []
         },
@@ -1817,7 +1589,7 @@
     },
     {
       "name": "09 Risk Tagging (Stage 09)",
-      "description": "Stage 09 — enrich the risk register with business metadata (process, function, department, KPI, region, control family).\n\nFlow: **List untagged → Run tagging (JOB) → Poll job → List recommendations → Apply selected → KPIs**.\n\nRecommendations carry confidence, rationale and evidence; a human reviewer applies them before they become official (human-in-the-loop). Catalogs are bootstrapped from Business Demography on first run. Control-family taxonomy follows ISO/IEC 27001:2022 Annex A + an AI & Model Governance family aligned to the MIT AI Risk Repository (https://airisk.mit.edu/navigator#/risks/browse).",
+      "description": "Stage 9 — read tag recommendations and apply anything left `needs_review`. Tagging (`auto_apply: true`) runs automatically via **POST /ingest**.",
       "item": [
         {
           "name": "List untagged risks",
@@ -1882,105 +1654,6 @@
               }
             }
           ]
-        },
-        {
-          "name": "Run risk tagging (JOB)",
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              },
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/risk-tagging/run",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "risk-tagging",
-                "run"
-              ]
-            },
-            "description": "## Purpose\nStarts the `risk_tagging` background job. Matches each eligible risk against the organisation catalogs (deterministic lexical matching + optional LLM refinement with fallback) and stores recommendations with confidence, rationale and evidence.\n\n## Response 202\n```json\n{ \"status\": \"accepted\", \"data\": { \"job_id\": \"…\", \"type\": \"risk_tagging\", \"risks_queued\": 42, \"processing_status\": \"in_progress\" } }\n```\n\nPoll `GET /jobs/{{jobId}}` until `completed`.\n\n## Errors\n400 NO_ELIGIBLE_RISKS · 404 CATALOG_NOT_FOUND · 409 JOB_ALREADY_RUNNING · 422 INVALID_TAG_DIMENSION\n\nAuto-apply is **off by default**; high-confidence auto-apply only when `auto_apply: true` and confidence ≥ `confidence_threshold`.",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n    \"client_org_id\": \"{{clientOrgId}}\",\n    \"only_untagged\": true,\n    \"overwrite_existing\": false,\n    \"tag_dimensions\": [\n        \"process\",\n        \"function\",\n        \"department\",\n        \"kpi\",\n        \"region\",\n        \"control_family\"\n    ],\n    \"auto_apply\": false,\n    \"confidence_threshold\": 0.75,\n    \"review_required_below_confidence\": 0.75\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('202', () => pm.response.to.have.status(202));",
-                  "const d = pm.response.json().data || {};",
-                  "if (d.job_id) pm.collectionVariables.set('jobId', d.job_id);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ]
-        },
-        {
-          "name": "Poll tagging job",
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "GET",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/jobs/{{jobId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "jobs",
-                "{{jobId}}"
-              ]
-            },
-            "description": "Poll until `status` = `completed` | `failed`. `payload.progress` shows live counters: `risks_total`, `risks_processed`, `tags_proposed`, `tags_applied`, `needs_review`."
-          },
-          "response": []
         },
         {
           "name": "List risk tag recommendations",
@@ -2225,7 +1898,7 @@
     },
     {
       "name": "10 Risk Owner Assignment (Stage 10)",
-      "description": "Stage 10 — recommend and assign accountable owners using risk tags + the organisation hierarchy snapshot.\n\nFlow: **List unassigned → Read hierarchy → Run assignment (JOB) → Poll job → List recommendations → Apply selected → KPIs**.\n\nOwner matching is a transparent weighted model (KPI owner 0.35, process owner 0.30, function 0.20, department 0.10, region 0.10, management-level fit 0.05) per ISO 31000 risk-ownership and the IIA Three Lines Model. Low-confidence matches stay `needs_review`.",
+      "description": "Stage 10 — read owner recommendations and apply anything left `needs_review`. Owner assignment (`auto_apply: true`) runs automatically as the final stage of **POST /ingest**.",
       "item": [
         {
           "name": "List unassigned risks",
@@ -2347,105 +2020,6 @@
               }
             }
           ]
-        },
-        {
-          "name": "Run owner assignment (JOB)",
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json",
-                "type": "text"
-              },
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/risk-assignments/run",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "risk-assignments",
-                "run"
-              ]
-            },
-            "description": "## Purpose\nStarts the `risk_owner_assignment` background job. Scores every active hierarchy user per risk using tagged context and proposes the best owner plus up to two alternates with confidence, `matched_on`, and plain-English rationale.\n\n## Response 202\n`data.job_id`, `risks_queued`, `processing_status`.\n\n## Errors\n400 NO_UNASSIGNED_RISKS · 404 HIERARCHY_NOT_FOUND · 409 JOB_ALREADY_RUNNING · 422 validation_error · 424 RISK_TAGGING_REQUIRED\n\nInactive users are ignored unless `include_inactive_users: true`. Low-confidence matches are kept as `needs_review`, never auto-assigned.",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n    \"client_org_id\": \"{{clientOrgId}}\",\n    \"only_unassigned\": true,\n    \"use_tagging_context\": true,\n    \"hierarchy_source\": {\n        \"hierarchy_snapshot_id\": \"{{hierarchySnapshotId}}\",\n        \"include_inactive_users\": false\n    },\n    \"assignment_strategy\": \"best_owner_with_alternates\",\n    \"auto_apply\": false,\n    \"confidence_threshold\": 0.8,\n    \"fallback_owner_role\": \"risk_admin\",\n    \"review_required_below_confidence\": 0.8\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test('202', () => pm.response.to.have.status(202));",
-                  "const d = pm.response.json().data || {};",
-                  "if (d.job_id) pm.collectionVariables.set('jobId', d.job_id);"
-                ],
-                "type": "text/javascript",
-                "packages": {},
-                "requests": {}
-              }
-            }
-          ]
-        },
-        {
-          "name": "Poll assignment job",
-          "request": {
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{token}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "method": "GET",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json",
-                "type": "text"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/jobs/{{jobId}}",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "jobs",
-                "{{jobId}}"
-              ]
-            },
-            "description": "Poll until `status` = `completed` | `failed`. `payload.progress` counters: `risks_total`, `risks_processed`, `owners_proposed`, `auto_assigned`, `needs_review`, `no_owner_found`."
-          },
-          "response": []
         },
         {
           "name": "List owner recommendations",
@@ -3408,7 +2982,7 @@
                     "extract"
                   ]
                 },
-                "description": "Non-org-scoped extract. Job type: extract_controls."
+                "description": "Non-org-scoped extract. Job type: extract_controls.\n\n**Debug/legacy only.** The org-scoped `POST /control-documents/extract/{clientOrgId}` trigger was removed — org-scoped extraction now runs automatically inside `POST /ingest/{clientOrgId}` (see the **Automated Pipeline** folder)."
               },
               "response": []
             },
@@ -3625,8 +3199,13 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/chatbot/status",
-              "host": ["{{baseUrl}}"],
-              "path": ["chatbot", "status"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chatbot",
+                "status"
+              ]
             },
             "description": "Check Milvus connectivity, embedding config, and the number of indexed chunks for the caller's org.\n\n## Response `200`\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"milvus_enabled\": true,\n    \"embeddings_configured\": true,\n    \"indexing_active\": true,\n    \"collection\": \"iso_robot_knowledge\",\n    \"client_org_id\": \"<org-uuid>\",\n    \"org_indexed_chunks\": 142\n  }\n}\n```\n\n**Before running queries:** confirm `indexing_active` is `true` and `org_indexed_chunks` > 0 (trigger reindex if not).\n\n| HTTP | code |\n|------|------|\n| 401 | `UNAUTHORIZED` / `SESSION_INVALID` |"
           },
@@ -3684,8 +3263,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/chatbot/reindex",
-              "host": ["{{baseUrl}}"],
-              "path": ["chatbot", "reindex"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chatbot",
+                "reindex"
+              ]
             },
             "description": "Queues a `reindex_org` background job that rebuilds the Milvus vector index for the caller's org from the current DB. Admins may pass `{ \"client_org_id\": \"<target-org>\" }` to reindex a different org.\n\nThe test script saves the returned `job_id` to `{{jobId}}`. Poll with **Poll job** below until `status = completed`, then hit **Chatbot status** to confirm chunk count.\n\n## Request body (optional)\n```json\n{ \"client_org_id\": \"<org-uuid>\" }\n```\nLeave `{}` to reindex your own org.\n\n## Response `202`\n```json\n{\n  \"status\": \"accepted\",\n  \"message\": \"Knowledge reindex started\",\n  \"data\": {\n    \"job_id\": \"<uuid>\",\n    \"type\": \"reindex_org\",\n    \"client_org_id\": \"<org-uuid>\",\n    \"processing_status\": \"in_progress\"\n  }\n}\n```\n\n| HTTP | code |\n|------|------|\n| 400 | `VALIDATION_ERROR` — no org resolved |\n| 401 | `UNAUTHORIZED` / `SESSION_INVALID` |\n| 403 | `FORBIDDEN` — non-admin targeting another org |"
           },
@@ -3714,8 +3298,13 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/jobs/{{jobId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["jobs", "{{jobId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "jobs",
+                "{{jobId}}"
+              ]
             },
             "description": "Poll the reindex job until `status = completed`. The `payload.result` block reports how many chunks were created per entity type.\n\n## Response `200` (completed)\n```json\n{\n  \"id\": \"<uuid>\",\n  \"type\": \"reindex_org\",\n  \"status\": \"completed\",\n  \"payload\": {\n    \"result\": {\n      \"status\": \"completed\",\n      \"chunks\": 142,\n      \"by_entity\": {\n        \"org\": 1,\n        \"controls\": 48,\n        \"issues\": 30,\n        \"aggregate\": 1,\n        \"risks\": 55,\n        \"risk_tags\": 5,\n        \"assignments\": 2\n      }\n    }\n  },\n  \"error\": null\n}\n```"
           },
@@ -3758,8 +3347,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/chatbot/query",
-              "host": ["{{baseUrl}}"],
-              "path": ["chatbot", "query"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chatbot",
+                "query"
+              ]
             },
             "description": "Ask the chatbot a question. The response is a **Server-Sent Events (SSE) stream** — Postman will display each event as it arrives in the response panel.\n\n**Prerequisites:** `indexing_active = true` and `org_indexed_chunks > 0` (run **Trigger reindex** first if needed).\n\n## Request body\n```json\n{\n  \"question\": \"What are my highest rated risks and who owns them?\",\n  \"top_k\": 8,\n  \"stage_hint\": \"risk\",\n  \"history\": [\n    { \"role\": \"user\", \"content\": \"previous question\" },\n    { \"role\": \"assistant\", \"content\": \"previous answer\" }\n  ]\n}\n```\n\n| Field | Required | Notes |\n|-------|----------|-------|\n| `question` | Yes | The question to ask |\n| `top_k` | No | Chunks to retrieve (default 8, max 50) |\n| `stage_hint` | No | Bias retrieval: `risk` \\| `issue` \\| `control` \\| `org` \\| `classification` \\| `tag` \\| `assignment` |\n| `history` | No | Prior turns for multi-turn conversations |\n\n## SSE event stream\nFour event types arrive in order:\n\n```text\nevent: retrieval\ndata: {\"sources\":[{\"entity_type\":\"risk\",\"entity_id\":\"...\",\"stage\":\"risk\",\"score\":0.92,\"snippet\":\"Risk: ...\"}]}\n\nevent: message\ndata: {\"delta\":\"Your \"}\n\nevent: message\ndata: {\"delta\":\"highest rated risk is...\"}\n\nevent: done\ndata: {\"citations\":[{\"entity_type\":\"risk\",\"entity_id\":\"...\",\"source_table\":\"risks\",\"score\":0.92}]}\n```\n\nOn error:\n```text\nevent: error\ndata: {\"message\":\"Chat failed: ...\"}\n```\n\n**curl alternative:**\n```bash\ncurl -N -X POST http://localhost:8000/api/v1/chatbot/query \\\n  -H 'Authorization: Bearer TOKEN' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"question\":\"What are my highest rated risks?\"}'\n```\n\n| HTTP | code |\n|------|------|\n| 401 | `UNAUTHORIZED` / `SESSION_INVALID` |\n| 403 | `FORBIDDEN` |"
           },
@@ -3802,8 +3396,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/chatbot/query",
-              "host": ["{{baseUrl}}"],
-              "path": ["chatbot", "query"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chatbot",
+                "query"
+              ]
             },
             "description": "Example query biased towards controls using `stage_hint: control`. Useful for testing that control chunks are indexed and retrieved correctly."
           },
@@ -3846,8 +3445,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/chatbot/query",
-              "host": ["{{baseUrl}}"],
-              "path": ["chatbot", "query"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "chatbot",
+                "query"
+              ]
             },
             "description": "Example query biased towards owner assignments using `stage_hint: assignment`."
           },
@@ -3880,12 +3484,42 @@
       "value": "http://localhost:8000"
     },
     {
+      "key": "stageURL",
+      "value": "http://localhost:8000",
+      "description": "API host root (no /api/v1). Matches Docker API_PORT."
+    },
+    {
       "key": "token",
       "value": ""
     },
     {
       "key": "clientOrgId",
       "value": ""
+    },
+    {
+      "key": "externalToken",
+      "value": "",
+      "description": "Auto-set by Login. Used by ingest/status external auth. Any value works when VERIFY_MOCK=true."
+    },
+    {
+      "key": "externalUserId",
+      "value": "",
+      "description": "Auto-set from login user_id. X-User-Id header for ingest/status."
+    },
+    {
+      "key": "externalUserEmail",
+      "value": "",
+      "description": "Auto-set from login username. X-User-Email header for ingest/status."
+    },
+    {
+      "key": "pipelineRunId",
+      "value": "",
+      "description": "Set automatically by 'Ingest documents (auto pipeline)'; used by 'Pipeline status (specific run)'."
+    },
+    {
+      "key": "samplePdfHint",
+      "value": "backend/fixtures/sample_control.pdf",
+      "description": "Sample PDF path in repo — attach manually in Ingest request."
     },
     {
       "key": "documentId",

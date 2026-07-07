@@ -4,7 +4,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.domain.heuristics import heuristic_classify_issue
@@ -211,7 +211,7 @@ def _normalize(data: Dict[str, Any]) -> Dict[str, Any]:
 
 async def classify_issue(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     issue_id: str,
 ) -> Optional[Dict[str, Any]]:
     issues = IssueRepository(conn)
@@ -264,12 +264,15 @@ async def classify_issue(
 
 async def classify_issues_job(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     issue_ids: Optional[List[str]],
+    *,
+    reclassify: bool = False,
 ) -> int:
     issues = IssueRepository(conn)
     if issue_ids:
-        todo = [i for i in issue_ids if i]
+        candidates = [i for i in issue_ids if i]
+        todo = candidates if reclassify else await issues.filter_ids_missing_classification(candidates)
     else:
         todo = await issues.list_ids_missing_classification()
 

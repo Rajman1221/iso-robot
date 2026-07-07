@@ -26,7 +26,7 @@ mine. This stage handles both.
 
 <Note>
 **Automated alternative:** `POST /ingest/{clientOrgId}` combines document intake
-with the full pipeline (extraction through risk tagging). Set `save_to_storage: true`
+with the full pipeline (extraction through risk owner assignment). Set `save_to_storage: true`
 to persist files the same way as the upload endpoint below, or leave it `false` to
 process without keeping files on disk. See
 [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
@@ -133,7 +133,7 @@ more relevant analysis later.
 If you used **manual upload**, confirm at least one PDF with the list/stats
 endpoints, then proceed to [Stage 03 · Extract Controls](/flow/03-extract-controls).
 
-If you used **`POST /ingest/{orgId}`**, stages 03–09 run automatically — poll
+If you used **`POST /ingest/{orgId}`**, stages 03–10 run automatically — poll
 [Pipeline status](/api-reference/pipeline#get-pipeline-status) until complete.
 
 Full request/response detail: [Organisation & Documents](/api-reference/org-documents) · [Pipeline API](/api-reference/pipeline).

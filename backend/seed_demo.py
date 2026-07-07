@@ -8,13 +8,12 @@ Run from backend/:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-
-import aiosqlite
 
 from iso_robot.config import get_settings
 from iso_robot.domain.repair_storage_paths import sync_org_folder_mapping
 from iso_robot.helpers.auth import hash_password
+from iso_robot.repositories.database import get_session_factory
+from iso_robot.repositories.migrations import run_migrations
 from iso_robot.repositories.org_repository import (
     FolderRepository,
     OrgRepository,
@@ -116,22 +115,16 @@ async def _ensure_user(
 
 async def main() -> None:
     settings = get_settings()
-    db_path = settings.resolved_database_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = await aiosqlite.connect(str(db_path))
-    conn.row_factory = aiosqlite.Row
-    await conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        schema = Path(__file__).resolve().parent / "src" / "iso_robot" / "repositories" / "init_schema.sql"
-        await conn.executescript(schema.read_text(encoding="utf-8"))
-        await conn.commit()
-        print("schema ok")
+    await run_migrations()
+    print("schema ok")
 
-        orgs = OrgRepository(conn)
-        users = UserRepository(conn)
-        folders = FolderRepository(conn)
-        tenants = TenantRepository(conn)
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        orgs = OrgRepository(session)
+        users = UserRepository(session)
+        folders = FolderRepository(session)
+        tenants = TenantRepository(session)
 
         platform = await orgs.get_by_slug(ADMIN["org_slug"])
         if not platform:
@@ -176,8 +169,6 @@ async def main() -> None:
         print("\nLogin credentials ready:")
         print(f"  Admin:   {ADMIN['email']} / {ADMIN['password']}")
         print(f"  Analyst: {ANALYST_ORGS[0]['user']['email']} / {ANALYST_ORGS[0]['user']['password']}")
-    finally:
-        await conn.close()
 
 
 if __name__ == "__main__":

@@ -1,37 +1,26 @@
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-import aiosqlite
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from iso_robot.repositories.db import dumps_json
-
-
-def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+from iso_robot.models import CandidateRisk, RiskDiscoveryResult, RiskLibrary
+from iso_robot.models.base import to_dict
 
 
-def _loads_issue_ids(raw: Any) -> List[str]:
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return [str(x) for x in raw]
-    try:
-        v = json.loads(raw)
-        return [str(x) for x in v] if isinstance(v, list) else []
-    except json.JSONDecodeError:
-        return []
+def _with_issue_ids(row: dict[str, Any]) -> dict[str, Any]:
+    row["issue_ids"] = row.pop("issue_ids_json", None) or []
+    return row
 
 
 class CandidateRiskRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def clear_all(self) -> None:
-        await self._conn.execute("DELETE FROM candidate_risks")
-        await self._conn.commit()
+        await self._session.execute(delete(CandidateRisk))
+        await self._session.commit()
 
     async def insert(
         self,
@@ -43,52 +32,31 @@ class CandidateRiskRepository:
         domain: Optional[str],
         confidence: Optional[float],
     ) -> None:
-        await self._conn.execute(
-            """
-            INSERT INTO candidate_risks (id, issue_ids_json, title, description, domain, confidence, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (row_id, dumps_json(issue_ids), title, description, domain, confidence, _now_iso()),
+        self._session.add(
+            CandidateRisk(
+                id=row_id,
+                issue_ids_json=issue_ids,
+                title=title,
+                description=description,
+                domain=domain,
+                confidence=confidence,
+            )
         )
-        await self._conn.commit()
+        await self._session.commit()
 
     async def list_all(self, limit: int = 500, offset: int = 0) -> List[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, issue_ids_json, title, description, domain, confidence, created_at
-            FROM candidate_risks
-            ORDER BY datetime(created_at) DESC
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        )
-        rows = await cur.fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            d["issue_ids"] = _loads_issue_ids(d.pop("issue_ids_json", None))
-            out.append(d)
-        return out
+        stmt = select(CandidateRisk).order_by(CandidateRisk.created_at.desc()).limit(limit).offset(offset)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_with_issue_ids(to_dict(r)) for r in rows]
 
     async def get_by_id(self, row_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, issue_ids_json, title, description, domain, confidence, created_at
-            FROM candidate_risks WHERE id = ?
-            """,
-            (row_id,),
-        )
-        row = await cur.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d["issue_ids"] = _loads_issue_ids(d.pop("issue_ids_json", None))
-        return d
+        obj = await self._session.get(CandidateRisk, row_id)
+        return _with_issue_ids(to_dict(obj)) if obj else None
 
 
 class RiskLibraryRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def upsert(
         self,
@@ -102,53 +70,53 @@ class RiskLibraryRepository:
         source_ref: Optional[str],
         notes: Optional[str],
     ) -> None:
-        now = _now_iso()
-        await self._conn.execute(
-            """
-            INSERT INTO risk_library (id, industry, risk_domain, title, description, tags, source_ref, notes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              industry = COALESCE(excluded.industry, industry),
-              risk_domain = COALESCE(excluded.risk_domain, risk_domain),
-              title = excluded.title,
-              description = COALESCE(excluded.description, description),
-              tags = COALESCE(excluded.tags, tags),
-              source_ref = COALESCE(excluded.source_ref, source_ref),
-              notes = COALESCE(excluded.notes, notes)
-            """,
-            (row_id, industry, risk_domain, title, description, tags, source_ref, notes, now),
-        )
-        await self._conn.commit()
+        existing = await self._session.get(RiskLibrary, row_id)
+        if existing is None:
+            self._session.add(
+                RiskLibrary(
+                    id=row_id,
+                    industry=industry,
+                    risk_domain=risk_domain,
+                    title=title,
+                    description=description,
+                    tags=tags,
+                    source_ref=source_ref,
+                    notes=notes,
+                )
+            )
+        else:
+            existing.industry = industry or existing.industry
+            existing.risk_domain = risk_domain or existing.risk_domain
+            existing.title = title
+            existing.description = description or existing.description
+            existing.tags = tags or existing.tags
+            existing.source_ref = source_ref or existing.source_ref
+            existing.notes = notes or existing.notes
+        await self._session.commit()
 
     async def list_all(self, limit: int = 2000, offset: int = 0) -> List[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, industry, risk_domain, title, description, tags, source_ref, notes, created_at
-            FROM risk_library
-            ORDER BY risk_domain, title
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
+        stmt = (
+            select(RiskLibrary)
+            .order_by(RiskLibrary.risk_domain, RiskLibrary.title)
+            .limit(limit)
+            .offset(offset)
         )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]
 
     async def count(self) -> int:
-        cur = await self._conn.execute("SELECT COUNT(1) AS c FROM risk_library")
-        row = await cur.fetchone()
-        return int(row[0]) if row else 0
+        return int((await self._session.execute(select(func.count(RiskLibrary.id)))).scalar_one())
 
 
 class RiskDiscoveryResultRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def delete_for_candidate(self, candidate_risk_id: str) -> None:
-        await self._conn.execute(
-            "DELETE FROM risk_discovery_results WHERE candidate_risk_id = ?",
-            (candidate_risk_id,),
+        await self._session.execute(
+            delete(RiskDiscoveryResult).where(RiskDiscoveryResult.candidate_risk_id == candidate_risk_id)
         )
-        await self._conn.commit()
+        await self._session.commit()
 
     async def insert(
         self,
@@ -160,41 +128,35 @@ class RiskDiscoveryResultRepository:
         rationale: Optional[str],
         bm25_score: Optional[float],
     ) -> None:
-        await self._conn.execute(
-            """
-            INSERT INTO risk_discovery_results
-              (id, candidate_risk_id, library_risk_id, match_status, rationale, bm25_score, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (row_id, candidate_risk_id, library_risk_id, match_status, rationale, bm25_score, _now_iso()),
+        self._session.add(
+            RiskDiscoveryResult(
+                id=row_id,
+                candidate_risk_id=candidate_risk_id,
+                library_risk_id=library_risk_id,
+                match_status=match_status,
+                rationale=rationale,
+                bm25_score=bm25_score,
+            )
         )
-        await self._conn.commit()
+        await self._session.commit()
 
     async def list_for_candidates(self, candidate_ids: List[str]) -> List[dict[str, Any]]:
         if not candidate_ids:
             return []
-        ph = ",".join("?" for _ in candidate_ids)
-        cur = await self._conn.execute(
-            f"""
-            SELECT id, candidate_risk_id, library_risk_id, match_status, rationale, bm25_score, created_at
-            FROM risk_discovery_results
-            WHERE candidate_risk_id IN ({ph})
-            ORDER BY datetime(created_at) DESC
-            """,
-            candidate_ids,
+        stmt = (
+            select(RiskDiscoveryResult)
+            .where(RiskDiscoveryResult.candidate_risk_id.in_(candidate_ids))
+            .order_by(RiskDiscoveryResult.created_at.desc())
         )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]
 
     async def list_all(self, limit: int = 2000, offset: int = 0) -> List[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, candidate_risk_id, library_risk_id, match_status, rationale, bm25_score, created_at
-            FROM risk_discovery_results
-            ORDER BY datetime(created_at) DESC
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
+        stmt = (
+            select(RiskDiscoveryResult)
+            .order_by(RiskDiscoveryResult.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]

@@ -85,11 +85,11 @@ icon: "circle-question"
   </Accordion>
   <Accordion title="How do I know when processing finished?" icon="gears">
     **Automated pipeline:** poll `GET /pipeline/status/{clientOrgId}` until
-    `status` is `completed`, `partial`, or `failed`. See
+    `status` is `completed` or `failed`. See
     [Pipeline API](/api-reference/pipeline).
 
-    **Legacy manual jobs:** poll `GET /jobs/{jobId}` per stage. See
-    [Jobs](/api-reference/jobs).
+    **Legacy global jobs** (`POST /controls/extract`, `POST /jobs` — debugging
+    only, not org-scoped): poll `GET /jobs/{jobId}`. See [Jobs](/api-reference/jobs).
   </Accordion>
   <Accordion title="Can I ingest documents without storing them on disk?" icon="cloud-arrow-up">
     Yes. `POST /ingest/{clientOrgId}` defaults to `save_to_storage: false` — the

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 
 from iso_robot.deps import get_db
@@ -10,7 +10,7 @@ from iso_robot.schemas.api import DashboardSummaryResponse
 
 
 async def dashboard_summary(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> DashboardSummaryResponse:
     async def _count(table: str) -> int:
         cur = await db.execute(f"SELECT COUNT(1) AS c FROM {table}")

@@ -1,24 +1,21 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-import aiosqlite
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from iso_robot.repositories.db import dumps_json
-
-
-def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+from iso_robot.models import Control
+from iso_robot.models.base import new_uuid, to_dict, utcnow
 
 
 class ControlRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def delete_for_document(self, document_id: str) -> None:
-        await self._conn.execute("DELETE FROM controls WHERE document_id = ?", (document_id,))
-        await self._conn.commit()
+        await self._session.execute(delete(Control).where(Control.document_id == document_id))
+        await self._session.commit()
 
     async def insert_many(
         self,
@@ -26,23 +23,19 @@ class ControlRepository:
         client_org_id: Optional[str] = None,
     ) -> None:
         for r in rows:
-            await self._conn.execute(
-                """
-                INSERT INTO controls (id, document_id, client_org_id, control_text, section_ref, framework, source_page, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    r["id"],
-                    r["document_id"],
-                    r.get("client_org_id") or client_org_id,
-                    r.get("control_text"),
-                    r.get("section_ref"),
-                    r.get("framework"),
-                    r.get("source_page"),
-                    r.get("created_at") or _now_iso(),
-                ),
+            self._session.add(
+                Control(
+                    id=r.get("id") or new_uuid(),
+                    document_id=r["document_id"],
+                    client_org_id=r.get("client_org_id") or client_org_id,
+                    control_text=r.get("control_text"),
+                    section_ref=r.get("section_ref"),
+                    framework=r.get("framework"),
+                    source_page=r.get("source_page"),
+                    created_at=r.get("created_at") or utcnow(),
+                )
             )
-        await self._conn.commit()
+        await self._session.commit()
 
     async def list_all(
         self,
@@ -52,40 +45,22 @@ class ControlRepository:
         document_id: Optional[str] = None,
         client_org_id: Optional[str] = None,
     ) -> List[dict[str, Any]]:
-        clauses = []
-        params: list[Any] = []
+        stmt = select(Control)
         if document_id:
-            clauses.append("document_id = ?")
-            params.append(document_id)
+            stmt = stmt.where(Control.document_id == document_id)
         if client_org_id:
-            clauses.append("client_org_id = ?")
-            params.append(client_org_id)
-        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        params.extend([limit, offset])
-        cur = await self._conn.execute(
-            f"""
-            SELECT id, document_id, client_org_id, control_text, section_ref, framework, source_page, created_at
-            FROM controls
-            {where}
-            ORDER BY datetime(created_at) DESC
-            LIMIT ? OFFSET ?
-            """,
-            tuple(params),
-        )
-        rows = await cur.fetchall()
-        return [dict(x) for x in rows]
-    
+            stmt = stmt.where(Control.client_org_id == client_org_id)
+        stmt = stmt.order_by(Control.created_at.desc()).limit(limit).offset(offset)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]
 
     async def get_by_document(self, document_id: str) -> List[dict[str, Any]]:
         return await self.list_all(limit=10000, offset=0, document_id=document_id)
-    
+
     async def stats_for_org(self, client_org_id: str) -> dict[str, int]:
-        cur = await self._conn.execute(
-            """
-            SELECT COUNT(*) AS controls, COUNT(DISTINCT document_id) AS documents
-            FROM controls WHERE client_org_id = ?
-            """,
-            (client_org_id,),
-        )
-        row = await cur.fetchone()
-        return {"controls": row["controls"], "documents": row["documents"]}
+        stmt = select(
+            func.count(Control.id),
+            func.count(func.distinct(Control.document_id)),
+        ).where(Control.client_org_id == client_org_id)
+        row = (await self._session.execute(stmt)).one()
+        return {"controls": int(row[0] or 0), "documents": int(row[1] or 0)}

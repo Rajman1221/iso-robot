@@ -9,8 +9,9 @@ then covers the optional publish, assign, and chatbot stages.
 
 <Note>
 **Read this first.** The **automated ingest path** (two API calls) is the
-recommended integration for clients and webhooks. The manual stage-by-stage path
-remains available for debugging and analyst workflows.
+**only** way to run stages 03–10 — the org-scoped manual per-stage endpoints
+described further down have been **removed**. That section is kept for
+historical/domain-logic reference only.
 </Note>
 
 ## Automated path (recommended)
@@ -28,18 +29,18 @@ flowchart TD
     D4 --> D5[Risk discovery]
     D5 --> D6[Risk scoring]
     D6 --> D7[Risk tagging]
-    D7 --> E[GET /pipeline/status/clientOrgId]
+    D7 --> D8[Risk owner assignment]
+    D8 --> E[GET /pipeline/status/clientOrgId]
     E --> F{completed?}
     F -- no --> E
-    F -- yes --> G[Read /controls /issues /risk-tags …]
+    F -- yes --> G[Read /controls /issues /risk-tags /risk-assignments …]
     G --> H[08 · Publish selected risks]
-    H --> I[10 · Owner assignment]
-    I --> J[11 · Chatbot]
+    H --> J[11 · Chatbot]
 
     classDef api fill:#1e40af,stroke:#93c5fd,color:#fff
     classDef auto fill:#0E7490,stroke:#22D3EE,color:#fff
     class B,E api
-    class D1,D2,D3,D4,D5,D6,D7 auto
+    class D1,D2,D3,D4,D5,D6,D7,D8 auto
 ```
 
 Full detail: [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline) ·
@@ -60,85 +61,62 @@ Full detail: [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline) ·
   </Step>
   <Step title="Poll pipeline status">
     `GET /pipeline/status/{clientOrgId}` every 3–10 s until `status` is
-    `completed`, `partial`, or `failed`.
+    `completed` or `failed`.
   </Step>
   <Step title="Review output">
     `GET /controls`, `GET /issues`, `GET /classifications/aggregate`,
-    `GET /candidate-risks`, `GET /issues/{id}/risk-assessment`, `GET /risk-tags`.
+    `GET /candidate-risks`, `GET /issues/{id}/risk-assessment`, `GET /risk-tags`,
+    `GET /risk-assignments`.
   </Step>
   <Step title="Publish & beyond (manual approval)">
-    `POST /risks/upload-selected` → owner assignment → chatbot reindex & query.
+    `POST /risks/upload-selected` for any manually-selected risks →
+    `POST /risk-assignments/apply-selected` for anything left `needs_review` →
+    chatbot reindex & query.
   </Step>
 </Steps>
 
 ---
 
-## Manual path (legacy / debugging)
+## Manual path — **removed** (historical reference only)
 
-The original stage-by-stage flow — one POST per job, poll each `job_id` separately.
+<Warning>
+Every endpoint in this section that used to trigger stages 03–10 individually
+(`POST /control-documents/extract/{orgId}`, `POST /issues/from-controls/{orgId}`,
+`POST /issues/classify`, `POST /risk-discovery/run`, `POST /risk-scoring/run`,
+`POST /risk-tagging/run`, `POST /risk-assignments/run`) has been **removed**.
+This diagram is kept only to document how the domain logic used to be invoked
+one stage at a time — for any real integration, use the
+[automated path](#automated-path-recommended) above.
+</Warning>
 
 ```mermaid
 flowchart TD
     A[01 · Login] --> B[02 · Upload / list org documents]
-    B --> C[03 · Extract controls — JOB]
+    B --> C["03 · Extract controls (removed endpoint)"]
     C --> D[GET controls by orgId]
-    D --> E[04 · Issues from controls — JOB]
-    E --> F[04 · Classify issues — JOB]
+    D --> E["04 · Issues from controls (removed endpoint)"]
+    E --> F["04 · Classify issues (removed endpoint)"]
     F --> G[05 · PESTEL / SWOT / TVRA aggregate]
-    G --> H[06 · Risk discovery — JOB]
-    H --> I[07 · Risk scoring — JOB]
+    G --> H["06 · Risk discovery (removed endpoint)"]
+    H --> I["07 · Risk scoring (removed endpoint)"]
     I --> J[07 · GET risk assessment]
     J --> K[08 · Publish selected risks to portal]
-    K --> L[09 · Risk tagging — JOB]
+    K --> L["09 · Risk tagging (removed endpoint)"]
     L --> M[09 · Apply selected tags]
-    M --> N[10 · Owner assignment — JOB]
+    M --> N["10 · Owner assignment (removed endpoint)"]
     N --> O[10 · Apply selected assignments]
-    O --> P[11 · Reindex org knowledge — JOB]
+    O --> P[11 · Reindex org knowledge — JOB, still available]
     P --> Q[11 · Query chatbot — SSE stream]
 
+    classDef removed fill:#7f1d1d,stroke:#fca5a5,color:#fff;
     classDef job fill:#0E7490,stroke:#22D3EE,color:#fff;
-    class C,E,F,H,I,L,N,P job;
+    class C,E,F,H,I,L,N removed;
+    class P job;
 ```
 
-<Note>
-Teal boxes are **background jobs** — start, poll `GET /jobs/{jobId}`, then read
-results. See [Background Jobs](/process/background-jobs).
-</Note>
-
-### Manual happy path
-
-<Steps>
-  <Step title="Log in">
-    `POST /auth/login` → save the `access_token` and `client_org_id`.
-  </Step>
-  <Step title="Confirm documents exist">
-    `GET /control-documents/{orgId}` → ensure at least one PDF is uploaded.
-  </Step>
-  <Step title="Extract controls">
-    `POST /control-documents/extract/{orgId}` → poll the job → `GET /controls`.
-  </Step>
-  <Step title="Generate issues">
-    `POST /issues/from-controls/{orgId}` with `classify_after: true` → poll → `GET /issues`.
-  </Step>
-  <Step title="Review classification charts">
-    `GET /classifications/aggregate` once the classify job completes.
-  </Step>
-  <Step title="Seed library & run discovery">
-    `POST /risk-library/seed-from-poc` (once) → `POST /risk-discovery/run` → poll → `GET /candidate-risks`.
-  </Step>
-  <Step title="Score risks">
-    `POST /risk-scoring/run` → poll → `GET /issues/{id}/risk-assessment`.
-  </Step>
-  <Step title="Tag risks">
-    `POST /risk-tagging/run` → poll → `GET /risk-tags`.
-  </Step>
-  <Step title="Publish">
-    `POST /risks/upload-selected` → `GET /risks/{orgId}`.
-  </Step>
-  <Step title="Chatbot">
-    `POST /chatbot/reindex` (once) → `POST /chatbot/query` (SSE stream).
-  </Step>
-</Steps>
+Two global (non-org-scoped) job endpoints remain for low-level debugging:
+`POST /controls/extract` and the generic `POST /jobs` — see
+[Background Jobs](/process/background-jobs).
 
 ---
 
@@ -159,7 +137,7 @@ results. See [Background Jobs](/process/background-jobs).
       <td>[Automated Ingest](/flow/00-automated-ingest-pipeline)</td>
       <td>Files via `POST /ingest/{orgId}`</td>
       <td>Full pipeline output + `pipeline_run_id`</td>
-      <td><strong>Yes — stages 03–09</strong></td>
+      <td><strong>Yes — stages 03–10</strong></td>
     </tr>
     <tr>
       <td>[02 Org & Documents](/flow/02-org-documents)</td>
@@ -213,7 +191,7 @@ results. See [Background Jobs](/process/background-jobs).
       <td>[10 Risk Owner Assignment](/flow/10-risk-owner-assignment)</td>
       <td>Hierarchy + tagged risks</td>
       <td>Accountable owners</td>
-      <td>Manual approval</td>
+      <td>Yes (high-confidence auto-applied; rest need approval)</td>
     </tr>
     <tr>
       <td>[11 Chatbot](/flow/11-chatbot)</td>

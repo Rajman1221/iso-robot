@@ -4,6 +4,15 @@ description: "Combine LLM judgment with deterministic matrices to produce audita
 icon: "gauge-high"
 ---
 
+<Warning>
+The manual trigger `POST /risk-scoring/run` described on this page has been
+**removed**. This stage now only runs automatically as part of
+`POST /ingest/{clientOrgId}` — and now also **auto-promotes** scored issues
+into `risks` rows (the automated equivalent of the manual "apply selected
+risks" step). See [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
+The rest of this page still describes the underlying scoring logic accurately.
+</Warning>
+
 <Note>
 **In plain English:** each risk gets a rating. The AI judges *how likely* and *how
 bad* something is and *how well current controls cover it* — then a fixed scoring
@@ -149,8 +158,7 @@ organisation's risk appetite without changing how the model is prompted.
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/risk-scoring/run` | Bearer | Start the `score_risks` job |
-| `GET` | `/jobs/{jobId}` | Bearer | Poll job status |
+| ~~`POST`~~ | ~~`/risk-scoring/run`~~ | — | **Removed** — runs automatically inside `/ingest` (also auto-promotes to `risks`) |
 | `GET` | `/issues/{issueId}/risk-assessment` | Bearer | Latest assessment for an issue |
 
 ### Assessment response

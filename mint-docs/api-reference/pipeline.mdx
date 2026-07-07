@@ -4,11 +4,38 @@ description: "Ingest documents and poll org-level pipeline status — the two en
 icon: "bolt"
 ---
 
-The automated pipeline replaces the manual start-and-poll pattern for stages 03–09.
-Clients call **one ingest endpoint** to begin processing and **one status endpoint**
-to track progress. All intermediate stages run as Celery tasks behind RabbitMQ.
+The automated pipeline is the **only** way to run control extraction, issue
+synthesis, classification, chart generation, risk discovery, risk scoring,
+risk tagging, and risk owner assignment — the equivalent per-stage manual
+endpoints have been removed.
+Clients call **one ingest endpoint** to begin processing and **one status
+endpoint** to track progress. All intermediate stages run as Celery tasks
+behind RabbitMQ, with Redis as the result backend.
 
 Process narrative: [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
+
+<Warning>
+These two endpoints use a **different authentication mechanism** from the rest
+of the API — see [Authentication](#authentication) below.
+</Warning>
+
+---
+
+## Authentication
+
+`POST /ingest/{clientOrgId}` and `GET /pipeline/status/{clientOrgId}` are
+authenticated against an **external backend**, not ISO Robot's own JWT.
+
+| Header | Value |
+| --- | --- |
+| `Authorization` | `Bearer <existing-backend token>` |
+| `X-User-Id` | the calling user's id |
+| `X-User-Email` | the calling user's email |
+| `X-Org-Id` | the organisation id — must equal `{clientOrgId}` in the path |
+
+ISO Robot verifies the token against `VERIFY_API_URL` (with a 30-minute sliding
+cache) before doing any work. See the backend README's "External-backend auth"
+section for the full contract.
 
 ---
 
@@ -18,11 +45,12 @@ Process narrative: [Automated Ingest Pipeline](/flow/00-automated-ingest-pipelin
 POST /ingest/{clientOrgId}
 ```
 
-**Auth:** Bearer · **Response:** `202 Accepted`
+**Auth:** external-backend verify · **Response:** `202 Accepted`
 
-Accepts one or more files, registers each document by content hash, and enqueues
-the full pipeline for the organisation. Returns immediately with a
-`pipeline_run_id` — processing happens asynchronously.
+Accepts one or more **PDF** files, registers each by content hash (SHA-256)
+scoped to the organisation, creates a `pipeline_runs` row, and enqueues the
+full Celery canvas. Returns immediately with a `pipeline_run_id` — processing
+happens asynchronously.
 
 ### Path parameters
 
@@ -34,24 +62,21 @@ the full pipeline for the organisation. Returns immediately with a
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `file` | file | Yes | — | Document to ingest. Repeat the field for multiple files. |
-| `save_to_storage` | boolean | No | `false` | When `true`, persist files to the org document folder (legacy upload behaviour). When `false`, only hash + metadata are kept. |
-| `force_reprocess` | boolean | No | `false` | Re-run the pipeline even when the content hash was already completed. |
-| `document_type` | string | No | — | Free-text type label (e.g. `policy`, `regulation`) |
-| `document_category` | string | No | — | Framework or category tag (e.g. `ISO27001`) |
-| `document_version` | string | No | — | Version label for the document |
-| `uploaded_by` | string | No | — | Audit attribution |
+| `file` | file | Yes | — | PDF document to ingest. Repeat the field for multiple files. Non-PDF or empty files are rejected per-file (`"status": "rejected"`), not for the whole request. |
+| `save_to_storage` | boolean | No | `PIPELINE_SAVE_TO_STORAGE_DEFAULT` (`false`) | When `true`, persist files permanently under the org's document folder. When `false`, files live in a per-run temp directory and are deleted once the run completes. |
+| `force_reprocess` | boolean | No | `false` | Re-run the pipeline even when this sha256 was already registered for this org. |
 
 ### Example (curl)
 
 ```bash
 curl -X POST "http://157.20.190.175:8000/api/v1/ingest/{clientOrgId}" \
-  -H "Authorization: Bearer $TOKEN" \
+  -H "Authorization: Bearer $EXISTING_BACKEND_TOKEN" \
+  -H "X-User-Id: $USER_ID" \
+  -H "X-User-Email: user@example.com" \
+  -H "X-Org-Id: {clientOrgId}" \
   -F "file=@policy.pdf" \
-  -F "file=@controls.docx" \
-  -F "save_to_storage=false" \
-  -F "document_type=policy" \
-  -F "document_category=ISO27001"
+  -F "file=@controls.pdf" \
+  -F "save_to_storage=false"
 ```
 
 ### Response `202`
@@ -59,64 +84,60 @@ curl -X POST "http://157.20.190.175:8000/api/v1/ingest/{clientOrgId}" \
 ```json
 {
   "status": "accepted",
-  "message": "Pipeline started",
+  "message": "Pipeline run queued: 2 new/reprocessed document(s), 0 duplicate(s) skipped.",
   "data": {
-    "pipeline_run_id": "550e8400-e29b-41d4-a716-446655440000",
     "client_org_id": "686f6c71-0000-4000-8000-000000000001",
-    "status": "pending",
-    "current_stage": "received",
-    "documents": {
-      "total": 2,
-      "queued": 2,
-      "skipped_duplicates": 0
-    },
-    "document_ids": [
-      "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      "b2c3d4e5-f6a7-8901-bcde-f12345678901"
-    ],
-    "skipped_duplicates": []
-  }
-}
-```
-
-When some files are duplicates of already-processed content:
-
-```json
-{
-  "status": "accepted",
-  "message": "Pipeline started with skipped duplicates",
-  "data": {
     "pipeline_run_id": "550e8400-e29b-41d4-a716-446655440000",
-    "client_org_id": "686f6c71-0000-4000-8000-000000000001",
-    "status": "pending",
-    "current_stage": "received",
-    "documents": {
-      "total": 2,
-      "queued": 1,
-      "skipped_duplicates": 1
-    },
-    "document_ids": ["a1b2c3d4-e5f6-7890-abcd-ef1234567890"],
-    "skipped_duplicates": [
+    "celery_task_id": "6b1f1e6a-8f1a-4a9e-9c2e-4f6f7a1b2c3d",
+    "status": "queued",
+    "save_to_storage": false,
+    "force_reprocess": false,
+    "total_documents": 2,
+    "new_documents": 2,
+    "skipped_duplicate_documents": 0,
+    "documents": [
       {
-        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "filename": "policy.pdf",
-        "document_id": "existing-uuid-if-known",
-        "reason": "already_processed"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "document_registry_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "document_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567891",
+        "status": "queued",
+        "times_seen": 1
+      },
+      {
+        "filename": "controls.pdf",
+        "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "document_registry_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+        "document_id": "b2c3d4e5-f6a7-8901-bcde-f12345678902",
+        "status": "queued",
+        "times_seen": 1
       }
-    ]
+    ],
+    "status_url": "/api/v1/pipeline/status/686f6c71-0000-4000-8000-000000000001?pipeline_run_id=550e8400-e29b-41d4-a716-446655440000"
   }
 }
 ```
+
+`documents[].status` is one of:
+
+| Value | Meaning |
+| --- | --- |
+| `queued` | New content (unseen sha256 for this org); queued for the full pipeline |
+| `reprocessed` | Previously-seen content, re-queued because `force_reprocess=true` |
+| `duplicate` | Previously-seen content, skipped (`force_reprocess` omitted/`false`) |
+| `rejected` | Not a PDF, or the upload was empty |
 
 ### Errors
 
 | HTTP | code | Meaning |
 | --- | --- | --- |
-| 400 | `FILE_UPLOAD_FAILED` | No files supplied or all uploads failed |
-| 401 | `UNAUTHORIZED` / `SESSION_INVALID` | Missing or invalid token |
-| 403 | `FORBIDDEN` | Token org does not match `clientOrgId` |
+| 400 | `FILE_UPLOAD_FAILED` | No files supplied |
+| 401 | `UNAUTHORIZED` | Missing token or `X-User-Id`/`X-User-Email`/`X-Org-Id` headers |
+| 401 | `SESSION_INVALID` | External verification failed |
+| 403 | `FORBIDDEN` | `X-Org-Id` does not match `clientOrgId`, or identity mismatch |
 | 404 | `CLIENT_ORG_NOT_FOUND` | Unknown organisation |
-| 422 | `validation_error` | Invalid form fields |
+| 409 | `PIPELINE_RUN_IN_PROGRESS` | A run is already `queued`/`running` for this org — poll status until it finishes, or call **Cancel pipeline** |
+| 503 | `EXTERNAL_AUTH_UNAVAILABLE` | The verify backend is unreachable (fails closed) |
 
 <Warning>
 Ensure the risk library is seeded (`POST /risk-library/seed-from-poc`) before
@@ -131,11 +152,10 @@ ingesting. The automated pipeline runs risk discovery against that catalogue.
 GET /pipeline/status/{clientOrgId}
 ```
 
-**Auth:** Bearer · **Response:** `200`
+**Auth:** external-backend verify · **Response:** `200`
 
-Returns the current state of the organisation's pipeline — latest run by default.
-Use this endpoint to poll progress after ingest. No separate job IDs are required
-for individual stages.
+Returns the current state of the organisation's pipeline — the **latest run**
+by default. Use this endpoint to poll progress after ingest.
 
 ### Path parameters
 
@@ -148,134 +168,148 @@ for individual stages.
 | Param | Type | Description |
 | --- | --- | --- |
 | `pipeline_run_id` | uuid | Return a specific run instead of the latest |
-| `include_history` | boolean | When `true`, include summary of recent completed runs |
 
 ### Example (curl)
 
 ```bash
 curl "http://157.20.190.175:8000/api/v1/pipeline/status/{clientOrgId}" \
-  -H "Authorization: Bearer $TOKEN"
+  -H "Authorization: Bearer $EXISTING_BACKEND_TOKEN" \
+  -H "X-User-Id: $USER_ID" \
+  -H "X-User-Email: user@example.com" \
+  -H "X-Org-Id: {clientOrgId}"
 ```
 
 ### Response `200`
 
 ```json
 {
-  "client_org_id": "686f6c71-0000-4000-8000-000000000001",
-  "pipeline_run_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "running",
-  "current_stage": "risk_scoring",
-  "progress_percent": 72,
-  "started_at": "2026-06-26T10:00:00.000Z",
-  "updated_at": "2026-06-26T10:04:32.000Z",
-  "completed_at": null,
-  "error": null,
-  "documents": {
-    "total": 5,
-    "processed": 3,
-    "remaining": 2,
-    "skipped_duplicates": 0,
-    "failed": 0,
-    "items": [
-      {
-        "document_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        "filename": "policy.pdf",
-        "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "persisted": false,
-        "status": "completed",
-        "current_stage": "done",
-        "stages_completed": [
-          "extract_controls",
-          "issues_from_controls",
-          "classify_issues",
-          "generate_charts",
-          "risk_discovery",
-          "risk_scoring",
-          "risk_tagging"
-        ],
-        "error": null
-      },
-      {
-        "document_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-        "filename": "controls.docx",
-        "content_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-        "persisted": true,
-        "status": "running",
-        "current_stage": "extract_controls",
-        "stages_completed": [],
-        "error": null
-      }
+  "status": "success",
+  "message": "Pipeline status retrieved",
+  "data": {
+    "client_org_id": "686f6c71-0000-4000-8000-000000000001",
+    "pipeline_run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "status": "running",
+    "current_stage": "score_risks",
+    "save_to_storage": false,
+    "force_reprocess": false,
+    "total_documents": 2,
+    "new_documents": 2,
+    "skipped_duplicate_documents": 0,
+    "processed_documents": 2,
+    "failed_documents": 0,
+    "progress_percent": 75,
+    "celery_task_id": "6b1f1e6a-8f1a-4a9e-9c2e-4f6f7a1b2c3d",
+    "error": null,
+    "started_at": "2026-06-30T10:00:00Z",
+    "completed_at": null,
+    "created_at": "2026-06-30T09:59:58Z",
+    "steps": [
+      { "stage": "ingest_register", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:00:00Z", "completed_at": "2026-06-30T10:00:01Z" },
+      { "stage": "extract_controls", "status": "completed", "document_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567891", "filename": null, "error": null, "started_at": "2026-06-30T10:00:01Z", "completed_at": "2026-06-30T10:01:20Z" },
+      { "stage": "extract_controls", "status": "completed", "document_id": "b2c3d4e5-f6a7-8901-bcde-f12345678902", "filename": null, "error": null, "started_at": "2026-06-30T10:00:01Z", "completed_at": "2026-06-30T10:01:35Z" },
+      { "stage": "issues_from_controls", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:01:36Z", "completed_at": "2026-06-30T10:02:10Z" },
+      { "stage": "classify_issues", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:02:10Z", "completed_at": "2026-06-30T10:02:40Z" },
+      { "stage": "generate_charts", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:02:40Z", "completed_at": "2026-06-30T10:02:45Z" },
+      { "stage": "risk_discovery", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:02:45Z", "completed_at": "2026-06-30T10:03:30Z" },
+      { "stage": "score_risks", "status": "running", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:03:30Z", "completed_at": null }
     ]
-  },
-  "stages": {
-    "extract_controls": {
-      "status": "completed",
-      "documents_total": 5,
-      "documents_done": 5
-    },
-    "issues_from_controls": {
-      "status": "completed",
-      "issues_created": 42
-    },
-    "classify_issues": {
-      "status": "completed",
-      "classified": 42
-    },
-    "generate_charts": {
-      "status": "completed",
-      "pestel_categories": 6,
-      "swot_quadrants": 4
-    },
-    "risk_discovery": {
-      "status": "completed",
-      "candidates": 18
-    },
-    "risk_scoring": {
-      "status": "running",
-      "scored": 12,
-      "total": 18
-    },
-    "risk_tagging": {
-      "status": "pending",
-      "tagged": 0,
-      "total": 0
-    }
   }
 }
 ```
+
+`steps[]` has one row per `(stage, document)` — org-level stages (everything
+after `extract_controls`) have `document_id: null`; `extract_controls` has one
+row per document, processed in parallel.
 
 ### `status` values (pipeline run)
 
 | Value | Meaning |
 | --- | --- |
-| `pending` | Run created; waiting for a worker |
-| `running` | Pipeline is actively processing |
-| `completed` | All stages finished successfully |
-| `partial` | Finished with one or more document-level failures |
-| `failed` | A stage failed and the run stopped |
+| `queued` | Run created; canvas dispatched, waiting for a worker |
+| `running` | At least one stage is actively processing |
+| `completed` | The canvas reached `pipeline_complete` for every queued document. Check `failed_documents` — a single document's extraction failure does **not** fail the whole run. |
+| `failed` | An unhandled error in any stage triggered the canvas's `link_error`, marking the whole run failed (see `error`) |
 
 ### `current_stage` values
 
 | Stage | Description |
 | --- | --- |
-| `received` | Ingest accepted; dedup in progress |
-| `extract_controls` | Azure DI + LLM control extraction |
-| `issues_from_controls` | Issue synthesis from controls |
-| `classify_issues` | PESTEL / SWOT / TVRA classification |
-| `generate_charts` | Chart aggregation |
-| `risk_discovery` | BM25 + LLM matching to risk library |
-| `risk_scoring` | Inherent and residual risk scoring |
-| `risk_tagging` | Catalog + LLM tag recommendations |
-| `done` | Pipeline complete |
+| `ingest_register` | Documents hashed, deduplicated, registered |
+| `extract_controls` | Azure DI + LLM control extraction (parallel chord, one task per document) |
+| `issues_from_controls` | Issue synthesis from the org's controls |
+| `classify_issues` | PESTEL / SWOT / TVRA classification of this run's new issues |
+| `generate_charts` | Chart aggregation (`aggregate_classifications`) |
+| `risk_discovery` | BM25 + LLM matching to the risk library |
+| `score_risks` | Inherent/residual risk scoring, plus auto-promotion to `risks` rows |
+| `risk_tagging` | Catalog + LLM tag recommendations (auto-applied above the confidence threshold) |
+| `risk_owner_assignment` | Hierarchy-based owner recommendations, auto-applied to `risks.owner_user_id` above the confidence threshold |
+| `complete` | Pipeline finished |
 
 ### Errors
 
 | HTTP | code | Meaning |
 | --- | --- | --- |
-| 401 | `UNAUTHORIZED` / `SESSION_INVALID` | Missing or invalid token |
-| 403 | `FORBIDDEN` | Token org does not match `clientOrgId` |
+| 401 | `UNAUTHORIZED` / `SESSION_INVALID` | Missing or invalid token/headers |
+| 403 | `FORBIDDEN` | `X-Org-Id` does not match `clientOrgId` |
 | 404 | `CLIENT_ORG_NOT_FOUND` | Unknown organisation |
-| 404 | `PIPELINE_RUN_NOT_FOUND` | No run exists for the org (or bad `pipeline_run_id`) |
+| 404 | `PIPELINE_RUN_NOT_FOUND` | No run exists for the org yet, or `pipeline_run_id` doesn't belong to it |
+
+---
+
+## Cancel active pipeline run
+
+```http
+POST /pipeline/cancel/{clientOrgId}
+```
+
+**Auth:** external-backend verify · **Response:** `200`
+
+Marks the organisation's active (`queued` or `running`) pipeline run as `failed`
+with error `"Cancelled by user"`, cleans up ephemeral upload temp files when
+applicable, and releases the one-active-run-per-org lock so a new ingest can start.
+
+Use this when a run is stuck or you need to retry without waiting for Celery to finish.
+
+### Example (curl)
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/pipeline/cancel/{clientOrgId}" \
+  -H "Authorization: Bearer $EXISTING_BACKEND_TOKEN" \
+  -H "X-User-Id: $USER_ID" \
+  -H "X-User-Email: user@example.com" \
+  -H "X-Org-Id: {clientOrgId}"
+```
+
+### Response `200`
+
+```json
+{
+  "status": "success",
+  "message": "Pipeline run cancelled",
+  "data": {
+    "client_org_id": "...",
+    "pipeline_run_id": "...",
+    "status": "failed",
+    "error": "Cancelled by user"
+  }
+}
+```
+
+### Errors
+
+| HTTP | code | Meaning |
+| --- | --- | --- |
+| 401 | `UNAUTHORIZED` / `SESSION_INVALID` | Missing or invalid token/headers |
+| 403 | `FORBIDDEN` | `X-Org-Id` does not match `clientOrgId` |
+| 404 | `CLIENT_ORG_NOT_FOUND` | Unknown organisation |
+| 404 | `NO_ACTIVE_PIPELINE_RUN` | No `queued`/`running` run for this org |
+
+<Note>
+In Docker Compose, ephemeral uploads (`save_to_storage=false`) are stored under
+`PIPELINE_INGEST_TEMP_DIR` (`/app/backend/data/ingest-tmp`), shared across the
+API and Celery worker containers via the `backend/data` volume. Without this,
+workers cannot read files the API saved to container-local `/tmp`.
+</Note>
 
 ---
 
@@ -283,42 +317,43 @@ curl "http://157.20.190.175:8000/api/v1/pipeline/status/{clientOrgId}" \
 
 <Steps>
   <Step title="Capture pipeline_run_id">
-    From the `202` ingest response — optional for polling (status defaults to latest
-    run for the org).
+    From the `202` ingest response — optional for polling (status defaults to
+    the latest run for the org).
   </Step>
   <Step title="Poll every 3–10 seconds">
-    `GET /pipeline/status/{clientOrgId}` while `status` is `pending` or `running`.
+    `GET /pipeline/status/{clientOrgId}` while `status` is `queued` or `running`.
   </Step>
   <Step title="Stop when terminal">
-    Exit the poll loop when `status` is `completed`, `partial`, or `failed`.
+    Exit the poll loop when `status` is `completed` or `failed`.
   </Step>
   <Step title="Fetch output">
-    Read controls, issues, classifications, candidates, assessments, and tags via
-    the existing list endpoints.
+    Read controls, issues, classifications, candidates, assessments, tags, and
+    risks via the existing list endpoints.
   </Step>
 </Steps>
 
 <Tip>
-`progress_percent` is a coarse UI hint derived from stage weights — use
-`current_stage` and `stages.*.status` for precise integration logic.
+`progress_percent` is a coarse UI hint (`current_stage`'s index in the 10-stage
+list) — use `current_stage` and `steps[].status` for precise integration logic.
 </Tip>
 
 ---
 
-## Relationship to legacy job endpoints
+## Relationship to the (removed) legacy job endpoints
 
-The automated pipeline runs the same work as these manual triggers, but chains
-them internally:
+The automated pipeline runs the same domain logic as the old manual triggers,
+but chains it internally — the endpoints themselves are **gone**:
 
-| Pipeline stage | Legacy manual endpoint |
+| Pipeline stage | Removed manual endpoint |
 | --- | --- |
-| Extract controls | `POST /control-documents/extract/{orgId}` |
-| Issues from controls | `POST /issues/from-controls/{orgId}` |
-| Classify issues | `POST /issues/classify` (or auto-chained) |
-| Generate charts | `GET /classifications/aggregate` (now also persisted as a stage) |
-| Risk discovery | `POST /risk-discovery/run` |
-| Risk scoring | `POST /risk-scoring/run` |
-| Risk tagging | `POST /risk-tagging/run` |
+| Extract controls | ~~`POST /control-documents/extract/{orgId}`~~ |
+| Issues from controls | ~~`POST /issues/from-controls/{orgId}`~~ |
+| Classify issues | ~~`POST /issues/classify`~~ |
+| Risk discovery | ~~`POST /risk-discovery/run`~~ |
+| Risk scoring | ~~`POST /risk-scoring/run`~~ |
+| Risk tagging | ~~`POST /risk-tagging/run`~~ |
+| Risk owner assignment | ~~`POST /risk-assignments/run`~~ |
 
-Legacy endpoints remain available for debugging and partial re-runs. See
-[Jobs](/api-reference/jobs) for the per-job poll pattern (`GET /jobs/{jobId}`).
+Two global (non-org-scoped) legacy endpoints remain for low-level debugging:
+`POST /controls/extract` and the generic `POST /jobs`. See
+[Jobs](/api-reference/jobs) for their poll pattern (`GET /jobs/{jobId}`).

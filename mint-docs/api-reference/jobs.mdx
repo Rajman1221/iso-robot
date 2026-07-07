@@ -6,13 +6,14 @@ icon: "gears"
 
 <Note>
 **Automated pipeline:** when you use `POST /ingest/{clientOrgId}`, poll
-`GET /pipeline/status/{clientOrgId}` — not individual job IDs. This page covers
-**legacy** per-stage jobs started by manual POST endpoints.
+`GET /pipeline/status/{clientOrgId}` — not individual job IDs. The org-scoped
+per-stage manual trigger endpoints have been **removed**; this page now only
+covers polling jobs created by the two remaining **global** (non-org-scoped)
+endpoints: `POST /controls/extract` and the generic `POST /jobs`.
 </Note>
 
-Every long-running **manual** stage — extraction, classification, discovery,
-scoring — is driven through these endpoints. The pattern is explained in
-[Background Jobs](/process/background-jobs).
+`GET /jobs/{jobId}` polls any job created by the two legacy global endpoints
+below. The pattern is explained in [Background Jobs](/process/background-jobs).
 
 ## Poll job status
 
@@ -66,10 +67,10 @@ in-flight and finished work.
 
 ### Job types
 
-| Type | Started by |
-| --- | --- |
-| `extract_controls` | `POST /control-documents/extract/{orgId}` |
-| `issues_from_controls` | `POST /issues/from-controls/{orgId}` |
-| `classify_issues` | `POST /issues/classify` (or chained after issues) |
-| `risk_discovery` | `POST /risk-discovery/run` |
-| `score_risks` | `POST /risk-scoring/run` |
+| Type | Started by | Notes |
+| --- | --- | --- |
+| `extract_controls` | `POST /controls/extract` (global) or `POST /jobs`, or automatically by `/ingest` | Org-scoped trigger endpoint removed |
+| `issues_from_controls` | `POST /jobs`, or automatically by `/ingest` | Org-scoped trigger endpoint removed |
+| `classify_issues` | `POST /jobs` (or chained after issues), or automatically by `/ingest` | Org-scoped trigger endpoint removed |
+| `risk_discovery` | `POST /jobs`, or automatically by `/ingest` | Dedicated trigger endpoint removed |
+| `score_risks` | `POST /jobs`, or automatically by `/ingest` | Dedicated trigger endpoint removed |

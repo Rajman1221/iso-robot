@@ -4,37 +4,26 @@ the full assessment dict is stored as JSON, keyed by issue, newest-wins.
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from iso_robot.repositories.db import dumps_json
-
-
-def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _loads_json(raw: Any) -> Any:
-    if raw is None or raw == "":
-        return {}
-    if isinstance(raw, (dict, list)):
-        return raw
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
+from iso_robot.models import RiskAssessment
+from iso_robot.models.base import to_dict
 
 
 class RiskAssessmentRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def delete_for_issue(self, issue_id: str) -> None:
-        await self._conn.execute("DELETE FROM risk_assessments WHERE issue_id = ?", (issue_id,))
-        await self._conn.commit()
+        rows = (
+            await self._session.execute(select(RiskAssessment).where(RiskAssessment.issue_id == issue_id))
+        ).scalars().all()
+        for r in rows:
+            await self._session.delete(r)
+        await self._session.commit()
 
     async def insert(
         self,
@@ -46,61 +35,44 @@ class RiskAssessmentRepository:
     ) -> None:
         # Flatten the headline fields into columns for easy querying/dashboarding;
         # keep the full structure (incl. per-control detail) in assessment_json.
-        await self._conn.execute(
-            """
-            INSERT INTO risk_assessments (
-                id, issue_id, risk_type, likelihood, consequence, velocity,
-                inherent_risk, overall_control_effectiveness, residual_risk,
-                risk_response, assessment_json, model_version, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                row_id,
-                issue_id,
-                assessment.get("risk_type"),
-                assessment.get("likelihood"),
-                assessment.get("consequence"),
-                assessment.get("velocity"),
-                assessment.get("inherent_risk"),
-                assessment.get("overall_control_effectiveness"),
-                assessment.get("residual_risk"),
-                assessment.get("risk_response"),
-                dumps_json(assessment),
-                model_version,
-                _now_iso(),
-            ),
+        self._session.add(
+            RiskAssessment(
+                id=row_id,
+                issue_id=issue_id,
+                risk_type=assessment.get("risk_type"),
+                likelihood=assessment.get("likelihood"),
+                consequence=assessment.get("consequence"),
+                velocity=assessment.get("velocity"),
+                inherent_risk=assessment.get("inherent_risk"),
+                overall_control_effectiveness=assessment.get("overall_control_effectiveness"),
+                residual_risk=assessment.get("residual_risk"),
+                risk_response=assessment.get("risk_response"),
+                assessment_json=assessment,
+                model_version=model_version,
+            )
         )
-        await self._conn.commit()
+        await self._session.commit()
 
     async def get_latest_for_issue(self, issue_id: str) -> Optional[Dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, issue_id, assessment_json, model_version, created_at
-            FROM risk_assessments WHERE issue_id = ?
-            ORDER BY datetime(created_at) DESC LIMIT 1
-            """,
-            (issue_id,),
+        stmt = (
+            select(RiskAssessment)
+            .where(RiskAssessment.issue_id == issue_id)
+            .order_by(RiskAssessment.created_at.desc())
+            .limit(1)
         )
-        row = await cur.fetchone()
-        if not row:
+        obj = (await self._session.execute(stmt)).scalars().first()
+        if not obj:
             return None
-        d = dict(row)
-        d["assessment"] = _loads_json(d.pop("assessment_json", None))
+        d = to_dict(obj)
+        d["assessment"] = d.pop("assessment_json", None) or {}
         return d
 
     async def list_all(self, limit: int = 2000, offset: int = 0) -> List[Dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, issue_id, assessment_json, model_version, created_at
-            FROM risk_assessments
-            ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        )
-        rows = await cur.fetchall()
+        stmt = select(RiskAssessment).order_by(RiskAssessment.created_at.desc()).limit(limit).offset(offset)
+        rows = (await self._session.execute(stmt)).scalars().all()
         out = []
         for r in rows:
-            d = dict(r)
-            d["assessment"] = _loads_json(d.pop("assessment_json", None))
+            d = to_dict(r)
+            d["assessment"] = d.pop("assessment_json", None) or {}
             out.append(d)
         return out

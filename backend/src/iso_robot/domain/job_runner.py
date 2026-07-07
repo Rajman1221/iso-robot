@@ -4,9 +4,8 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-import aiosqlite
-
 from iso_robot.config import get_settings
+from iso_robot.repositories.database import get_session_factory
 from iso_robot.domain.classify_issues import classify_issues_job
 from iso_robot.domain.discover_risks import run_risk_discovery
 from iso_robot.domain.extract_controls import run_extract_controls_job
@@ -21,12 +20,10 @@ logger = logging.getLogger(__name__)
 
 
 async def execute_job(job_id: str, job_type: str, payload: dict[str, Any]) -> None:
-    """Run a persisted job with a fresh DB connection (for BackgroundTasks)."""
+    """Run a persisted job with a fresh DB session (for BackgroundTasks)."""
     settings = get_settings()
-    db_path = str(settings.resolved_database_path())
-    async with aiosqlite.connect(db_path) as conn:
-        conn.row_factory = aiosqlite.Row
-        await conn.execute("PRAGMA foreign_keys = ON")
+    session_factory = get_session_factory()
+    async with session_factory() as conn:
         jobs = JobRepository(conn)
         try:
             await jobs.update_status(job_id, status="running", error=None)

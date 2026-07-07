@@ -18,9 +18,18 @@ PUBLIC_EXACT = {
 }
 PUBLIC_PREFIXES = ("/docs", "/redoc", "/openapi.json")
 
+# Paths authenticated against the EXTERNAL backend (not ISO Robot's own JWT).
+# They carry the existing-backend token and are protected by the
+# `verify_external_user` dependency, so the JWT session checkpoint must skip them.
+EXTERNAL_AUTH_PREFIXES = ("/api/v1/ingest", "/api/v1/pipeline/status", "/api/v1/pipeline/cancel")
+
 
 def _is_public(path: str) -> bool:
-    return path in PUBLIC_EXACT or any(path.startswith(p) for p in PUBLIC_PREFIXES)
+    return (
+        path in PUBLIC_EXACT
+        or any(path.startswith(p) for p in PUBLIC_PREFIXES)
+        or any(path.startswith(p) for p in EXTERNAL_AUTH_PREFIXES)
+    )
 
 
 class SessionValidationMiddleware(BaseHTTPMiddleware):

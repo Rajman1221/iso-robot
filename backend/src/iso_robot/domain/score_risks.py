@@ -9,7 +9,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.domain import risk_scoring as rs
@@ -29,7 +29,7 @@ def _issue_text(row: Dict[str, Any]) -> str:
 
 
 async def _resolve_controls(
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     issue_id: str,
     payload_controls: Optional[List[str]],
 ) -> List[str]:
@@ -40,7 +40,7 @@ async def _resolve_controls(
 
 async def score_issue(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     issue_id: str,
     controls: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -88,7 +88,7 @@ async def score_issue(
 
 async def score_risks_job(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     issue_ids: Optional[List[str]],
     controls: Optional[List[str]] = None,
     *,

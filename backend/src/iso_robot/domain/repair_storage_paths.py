@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.helpers.org_paths import (
@@ -37,7 +37,7 @@ async def sync_org_folder_mapping(
     return canonical
 
 
-async def repair_storage_paths(conn: aiosqlite.Connection, settings: Settings) -> None:
+async def repair_storage_paths(conn: AsyncSession, settings: Settings) -> None:
     """On startup: fix folder_mapping and control_documents paths after DB migration between hosts."""
     org_repo = OrgRepository(conn)
     folder_repo = FolderRepository(conn)

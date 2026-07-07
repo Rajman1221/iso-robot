@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-import aiosqlite
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +14,8 @@ from iso_robot.handlers import auth
 from iso_robot.handlers.health import health
 from iso_robot.domain.repair_storage_paths import repair_storage_paths
 from iso_robot.integrations.milvus_client import get_milvus_client
-from iso_robot.repositories.schema import ensure_schema
+from iso_robot.repositories.database import dispose_engine, get_session_factory
+from iso_robot.repositories.migrations import run_migrations
 from iso_robot.repositories.vector_repository import VectorRepository
 from iso_robot.middleware import SessionValidationMiddleware
 from iso_robot.routers.v1 import router as v1_router
@@ -26,14 +26,23 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
     logging.basicConfig(level=level)
-    db_path = settings.resolved_database_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(str(db_path)) as conn:
-        conn.row_factory = aiosqlite.Row
-        await conn.execute("PRAGMA foreign_keys = ON")
-        await ensure_schema(conn)
+
+    if settings.verify_mock:
+        logging.getLogger(__name__).warning(
+            "VERIFY_MOCK=true — external verify HTTP calls are DISABLED for "
+            "/ingest and /pipeline/status. Do not use in production."
+        )
+
+    if not settings.db_uri:
+        # Only relevant for the sqlite fallback — server databases manage their own dirs.
+        settings.resolved_database_path().parent.mkdir(parents=True, exist_ok=True)
+
+    await run_migrations()
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
         try:
-            await repair_storage_paths(conn, settings)
+            await repair_storage_paths(session, settings)
         except Exception:
             logging.getLogger(__name__).exception(
                 "Storage path repair failed; continuing startup"
@@ -48,6 +57,7 @@ async def lifespan(app: FastAPI):
             "Milvus collection bootstrap failed; continuing startup"
         )
     yield
+    await dispose_engine()
 
 
 def create_app() -> FastAPI:

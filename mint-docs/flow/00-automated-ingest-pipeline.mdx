@@ -1,6 +1,6 @@
 ---
 title: "Automated Ingest Pipeline"
-description: "Ingest documents with one call and let ISO Robot run the full risk pipeline automatically — from control extraction through risk tagging."
+description: "Ingest documents with one call and let ISO Robot run the full risk pipeline automatically — from control extraction through risk owner assignment."
 icon: "bolt"
 ---
 
@@ -10,81 +10,88 @@ anything it has already processed, and runs every downstream stage for you — n
 manual job triggers, no Postman folder hopping.
 </Note>
 
-This is the **recommended integration path** for clients and external systems.
-Instead of calling seven separate endpoints in order, you use two:
+This is the **only** integration path for the risk pipeline — the per-stage
+manual trigger endpoints have been removed. You call two endpoints:
 
 1. **`POST /ingest/{clientOrgId}`** — deliver documents and start the pipeline.
 2. **`GET /pipeline/status/{clientOrgId}`** — poll until the run completes.
 
 Everything between those two calls — control extraction, issue synthesis,
-classification, chart generation, risk discovery, risk scoring, and risk tagging —
-runs automatically in the background.
+classification, chart generation, risk discovery, risk scoring (which also
+auto-promotes scored issues into `risks` rows), risk tagging, and risk owner
+assignment — runs automatically in the background via Celery workers.
 
 ## What happens end-to-end
 
 ```mermaid
 flowchart TD
     A[Client sends documents] --> B[POST /ingest/clientOrgId]
-    B --> C{Hash already processed?}
-    C -- yes --> SKIP[Skip duplicate]
-    C -- no --> D[Register document + start pipeline_run]
-    D --> E[Extract controls]
-    E --> F[Issues from controls]
-    F --> G[Classify issues<br/>PESTEL / SWOT / TVRA]
-    G --> H[Generate charts]
-    H --> I[Risk discovery vs library]
-    I --> J[Risk scoring]
-    J --> K[Risk tagging]
-    K --> L([Pipeline completed])
-    SKIP --> L
+    B --> C{Active run already in progress?}
+    C -- yes --> REJECT[409 PIPELINE_RUN_IN_PROGRESS]
+    C -- no --> D{sha256 already seen for this org?}
+    D -- "yes, no force_reprocess" --> SKIP[Skip duplicate]
+    D -- "no, or force_reprocess" --> E[Register document + create pipeline_run]
+    E --> F[Extract controls<br/>— parallel per document —]
+    F --> G[Issues from controls]
+    G --> H[Classify issues<br/>PESTEL / SWOT / TVRA]
+    H --> I[Generate charts]
+    I --> J[Risk discovery vs library]
+    J --> K[Score risks<br/>+ auto-promote to Risk records]
+    K --> L[Risk tagging]
+    L --> R[Risk owner assignment<br/>+ auto-apply high-confidence owners]
+    R --> M([Pipeline completed])
+    SKIP --> M
 
-    M[Client polls] --> N[GET /pipeline/status/clientOrgId]
-    N --> O{status?}
-    O -- running --> M
-    O -- completed --> P[Read results via list endpoints]
+    N[Client polls] --> O[GET /pipeline/status/clientOrgId]
+    O --> P{status?}
+    P -- "queued / running" --> N
+    P -- completed --> Q[Read results via list endpoints]
 
     classDef api fill:#1e40af,stroke:#93c5fd,color:#fff
     classDef stage fill:#0E7490,stroke:#22D3EE,color:#fff
-    class B,N api
-    class E,F,G,H,I,J,K stage
+    class B,O api
+    class F,G,H,I,J,K,L,R stage
 ```
 
 ## Pipeline stages (automatic)
 
-Each stage reuses the same domain logic as the manual pipeline. The difference is
-that the **orchestrator** chains them — you never call these endpoints yourself
-during an ingest run.
+Each stage is a thin Celery task that reuses the **same domain functions** as
+the (now-removed) manual endpoints — the business logic did not change, only
+the orchestration. Extraction runs as a **Celery chord**: one task per
+document, all in parallel, before the chain continues.
 
 | Order | Stage | What it produces |
 | --- | --- | --- |
-| 1 | **Ingest & dedup** | Document registry rows keyed by `content_hash` |
-| 2 | **Extract controls** | Page-referenced `controls` from each document |
-| 3 | **Issues from controls** | Synthesised `issues` for the org |
-| 4 | **Classify issues** | PESTEL / SWOT / TVRA `issue_classifications` |
-| 5 | **Generate charts** | Aggregated chart snapshots (PESTEL, SWOT, TVRA) |
-| 6 | **Risk discovery** | `candidate_risks` matched to the seeded risk library |
-| 7 | **Risk scoring** | `risk_assessments` (inherent + residual) for org issues |
-| 8 | **Risk tagging** | Recommended `risk_tags` (process, function, KPI, region, control family) |
+| 1 | **`ingest_register`** | Documents hashed + registered in `document_registry`, deduplicated per org |
+| 2 | **`extract_controls`** | Page-referenced `controls` from each new document (parallel chord) |
+| 3 | **`issues_from_controls`** | Synthesised `issues` for the org (re-derived from all of the org's controls each run) |
+| 4 | **`classify_issues`** | PESTEL / SWOT / TVRA `issue_classifications` for this run's new issues |
+| 5 | **`generate_charts`** | Aggregated chart snapshot via `aggregate_classifications` |
+| 6 | **`risk_discovery`** | `candidate_risks` matched to the seeded risk library |
+| 7 | **`score_risks`** | `risk_assessments` (inherent + residual) **and** auto-created `risks` rows |
+| 8 | **`risk_tagging`** | `risk_tags` applied automatically for high-confidence matches (`auto_apply=true`) |
+| 9 | **`risk_owner_assignment`** | `risk_owner_assignments` proposed against the org hierarchy, with high-confidence matches auto-applied to `risks.owner_user_id` (`auto_apply=true`) |
 
 <Info>
-Stages after risk tagging — publishing to the Risks Portal, owner assignment, and
-chatbot reindex — remain **manual approval steps**. See
-[End-to-End Flow](/process/end-to-end-flow) for the full journey including those
-stages.
+The chatbot's Milvus reindex remains a **separate, manual step** — it is not
+part of the `/ingest` chain. See [End-to-End Flow](/process/end-to-end-flow)
+for the full journey including that stage.
 </Info>
 
 ## Document storage & deduplication
 
 Every ingested file is fingerprinted with a **SHA-256 hash** before processing
-starts. The hash is stored in the document registry scoped to the organisation.
+starts. The hash is stored in `document_registry`, scoped to `(client_org_id, sha256)`.
 
 | Scenario | Behaviour |
 | --- | --- |
-| New document (unknown hash) | Registered and queued for the full pipeline |
-| Duplicate hash, already completed | Skipped — returned in `skipped_duplicates[]` |
-| Duplicate hash, previous run failed | Re-queued from the failed stage (idempotent resume) |
-| `save_to_storage: false` (default) | Metadata + hash stored; file processed in memory / temp only |
-| `save_to_storage: true` | File persisted to the org folder (same as legacy upload) |
+| New document (unknown hash for this org) | Registered and queued for the full pipeline |
+| Duplicate hash, `force_reprocess` omitted/`false` | Skipped — returned with `"status": "duplicate"` |
+| Duplicate hash, `force_reprocess: true` | Re-queued; reuses the stored file if still present, otherwise re-saves it |
+| Non-PDF file, or empty file | Rejected — returned with `"status": "rejected"` (only PDF extraction is supported) |
+| `save_to_storage: false` (default) | File written to a per-run temp directory for processing, then deleted once the run finishes |
+| `save_to_storage: true` | File persisted under the org's document folder permanently |
+| Another pipeline run already active for this org | Whole request rejected — `409 PIPELINE_RUN_IN_PROGRESS` |
 
 <Tip>
 Use `save_to_storage: false` when you only need analysis output and do not want
@@ -100,44 +107,37 @@ the original uploads.
 POST /ingest/{clientOrgId}
 ```
 
-**Auth:** Bearer · **Response:** `202 Accepted`
+**Auth:** external-backend verify (see below) · **Response:** `202 Accepted`
 
-Multipart form — same file field pattern as the legacy upload endpoint, plus
-pipeline options.
+Multipart form.
 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
-| `file` | Yes | — | One or more files (repeat the field for batches) |
-| `save_to_storage` | No | `false` | Persist files to the org document folder |
-| `force_reprocess` | No | `false` | Re-run pipeline even if hash was already completed |
-| `document_type` | No | — | Free-text classifier (e.g. `policy`) |
-| `document_category` | No | — | Framework tag (e.g. `ISO27001`) |
-| `document_version` | No | — | Version label |
+| `file` | Yes | — | One or more **PDF** files (repeat the field for batches) |
+| `save_to_storage` | No | `PIPELINE_SAVE_TO_STORAGE_DEFAULT` (`false`) | Persist files to the org document folder |
+| `force_reprocess` | No | `false` | Re-run pipeline even if this sha256 was already seen for this org |
 
 **Response 202**
 
 ```json
 {
   "status": "accepted",
-  "message": "Pipeline started",
+  "message": "Pipeline run queued: 2 new/reprocessed document(s), 1 duplicate(s) skipped.",
   "data": {
-    "pipeline_run_id": "uuid",
     "client_org_id": "uuid",
-    "status": "pending",
-    "current_stage": "received",
-    "documents": {
-      "total": 3,
-      "queued": 2,
-      "skipped_duplicates": 1
-    },
-    "document_ids": ["uuid", "uuid"],
-    "skipped_duplicates": [
-      {
-        "content_hash": "abc123…",
-        "filename": "policy.pdf",
-        "reason": "already_processed"
-      }
-    ]
+    "pipeline_run_id": "uuid",
+    "celery_task_id": "uuid",
+    "status": "queued",
+    "save_to_storage": false,
+    "force_reprocess": false,
+    "total_documents": 3,
+    "new_documents": 2,
+    "skipped_duplicate_documents": 1,
+    "documents": [
+      { "filename": "policy.pdf", "sha256": "…", "document_registry_id": "uuid", "document_id": "uuid", "status": "queued", "times_seen": 1 },
+      { "filename": "old-policy.pdf", "sha256": "…", "document_registry_id": "uuid", "document_id": "uuid", "status": "duplicate", "times_seen": 2 }
+    ],
+    "status_url": "/api/v1/pipeline/status/{clientOrgId}?pipeline_run_id=uuid"
   }
 }
 ```
@@ -150,64 +150,60 @@ Full request/response detail: [Pipeline API](/api-reference/pipeline).
 GET /pipeline/status/{clientOrgId}
 ```
 
-**Auth:** Bearer · **Response:** `200`
+**Auth:** external-backend verify (see below) · **Response:** `200`
 
-Returns the **latest pipeline run** for the organisation — current stage,
-per-document progress, and stage-level counters. Poll every few seconds while
-`status` is `pending` or `running`.
-
-Optional query params:
-
-| Param | Description |
-| --- | --- |
-| `pipeline_run_id` | Inspect a specific run instead of the latest |
-| `include_history` | Include the last N completed runs |
+Returns the **latest pipeline run** for the organisation — or a specific one
+via `?pipeline_run_id=` — including per-document/per-stage step detail. Poll
+every few seconds while `status` is `queued` or `running`.
 
 **Response 200 (excerpt)**
 
 ```json
 {
-  "client_org_id": "uuid",
-  "pipeline_run_id": "uuid",
-  "status": "running",
-  "current_stage": "risk_scoring",
-  "progress_percent": 72,
-  "started_at": "2026-06-26T10:00:00Z",
-  "documents": {
-    "total": 5,
-    "processed": 3,
-    "remaining": 2,
-    "skipped_duplicates": 0,
-    "failed": 0,
-    "items": [
-      {
-        "document_id": "uuid",
-        "filename": "policy.pdf",
-        "content_hash": "abc123…",
-        "persisted": false,
-        "status": "completed",
-        "current_stage": "done"
-      }
+  "status": "success",
+  "data": {
+    "client_org_id": "uuid",
+    "pipeline_run_id": "uuid",
+    "status": "running",
+    "current_stage": "score_risks",
+    "progress_percent": 75,
+    "total_documents": 3,
+    "new_documents": 2,
+    "skipped_duplicate_documents": 1,
+    "processed_documents": 2,
+    "failed_documents": 0,
+    "celery_task_id": "uuid",
+    "error": null,
+    "started_at": "2026-06-30T10:00:00Z",
+    "completed_at": null,
+    "created_at": "2026-06-30T09:59:58Z",
+    "steps": [
+      { "stage": "ingest_register", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "…", "completed_at": "…" },
+      { "stage": "extract_controls", "status": "completed", "document_id": "uuid", "filename": "policy.pdf", "error": null, "started_at": "…", "completed_at": "…" },
+      { "stage": "score_risks", "status": "running", "document_id": null, "filename": null, "error": null, "started_at": "…", "completed_at": null }
     ]
-  },
-  "stages": {
-    "extract_controls":     { "status": "completed" },
-    "issues_from_controls": { "status": "completed", "issues_created": 42 },
-    "classify_issues":      { "status": "completed", "classified": 42 },
-    "generate_charts":      { "status": "completed" },
-    "risk_discovery":       { "status": "completed", "candidates": 18 },
-    "risk_scoring":         { "status": "running", "scored": 12, "total": 18 },
-    "risk_tagging":         { "status": "pending" }
   }
 }
 ```
 
+## Authentication (different from the rest of the API)
+
+Both endpoints authenticate against an **external backend**, not ISO Robot's
+own JWT. Send:
+
+| Header | Value |
+| --- | --- |
+| `Authorization` | `Bearer <existing-backend token>` |
+| `X-User-Id` | the calling user's id |
+| `X-User-Email` | the calling user's email |
+| `X-Org-Id` | the organisation id — **must equal** `{clientOrgId}` in the path |
+
+See [Authentication](/api-reference/authentication) and the backend README for
+the verify-backend contract, caching, and error codes.
+
 ## Recommended client flow
 
 <Steps>
-  <Step title="Authenticate">
-    `POST /auth/login` → save `access_token` and `client_org_id`.
-  </Step>
   <Step title="Seed the risk library (once per environment)">
     `POST /risk-library/seed-from-poc` if the library is not already populated.
     Risk discovery in the automated pipeline matches against this catalogue.
@@ -217,12 +213,15 @@ Optional query params:
   </Step>
   <Step title="Poll status">
     `GET /pipeline/status/{clientOrgId}` every 3–10 seconds until
-    `status` is `completed`, `failed`, or `partial`.
+    `status` is `completed` or `failed`.
   </Step>
   <Step title="Read results">
     Use the existing read endpoints — `GET /controls`, `GET /issues`,
     `GET /classifications/aggregate`, `GET /candidate-risks`,
-    `GET /issues/{id}/risk-assessment`, `GET /risk-tags` — to display output.
+    `GET /issues/{id}/risk-assessment`, `GET /risk-tags`, `GET /risks/{clientOrgId}`,
+    `GET /risk-assignments` — to display output. Anything left `needs_review`
+    (low-confidence owner match) can still be resolved via
+    `POST /risk-assignments/apply-selected`.
   </Step>
 </Steps>
 
@@ -234,22 +233,19 @@ sequenceDiagram
     participant Q as RabbitMQ / Celery
     participant DB as Database
 
-    C->>API: POST /auth/login
-    API-->>C: access_token + client_org_id
-
-    C->>API: POST /ingest/{clientOrgId}
+    C->>API: POST /ingest/{clientOrgId}  (external-backend token + X-headers)
     API->>DB: register hashes + create pipeline_run
-    API->>Q: enqueue pipeline.start
+    API->>Q: enqueue canvas (chain + chord)
     API-->>C: 202 pipeline_run_id
 
-    loop until completed
+    loop until completed or failed
         C->>API: GET /pipeline/status/{clientOrgId}
         API->>DB: read pipeline_run + document steps
         API-->>C: status, current_stage, progress
         Q->>DB: workers advance stages
     end
 
-    C->>API: GET /issues, /controls, …
+    C->>API: GET /issues, /controls, /risk-tags, …
     API-->>C: pipeline output
 ```
 
@@ -257,34 +253,29 @@ sequenceDiagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending: ingest accepted
-    pending --> running: worker picks up
-    running --> completed: all stages succeed
-    running --> partial: some documents failed
-    running --> failed: unrecoverable stage error
+    [*] --> queued: ingest accepted
+    queued --> running: worker picks up
+    running --> completed: canvas reaches pipeline_complete
+    running --> failed: any stage's link_error fires
     completed --> [*]
-    partial --> [*]
     failed --> [*]
 ```
 
 | `status` | Meaning |
 | --- | --- |
-| `pending` | Run created; not yet picked up by a worker |
+| `queued` | Run created; canvas dispatched, not yet picked up by a worker |
 | `running` | At least one stage is in progress |
-| `completed` | All stages finished successfully for all queued documents |
-| `partial` | Pipeline finished but one or more documents failed |
-| `failed` | A stage failed and the run could not continue |
+| `completed` | The canvas reached `pipeline_complete` — check `failed_documents` for per-document extraction failures, which do **not** fail the whole run |
+| `failed` | A stage raised an unhandled error and the canvas's `link_error` marked the run failed |
 
-## When to use the legacy manual flow
+## The legacy manual flow has been removed
 
-The per-stage endpoints (`POST /control-documents/extract/{orgId}`,
-`POST /issues/from-controls/{orgId}`, etc.) remain available for:
-
-- Debugging a single stage in isolation
-- Re-running one step after an analyst edit
-- Admin tooling and the API verification Postman collection
-
-For production integrations and webhook-driven ingestion, prefer this automated
-pipeline. See [Background Jobs](/process/background-jobs) for how individual job
-types map to pipeline stages, and [System Architecture](/process/architecture) for
-the Celery + RabbitMQ worker topology.
+The per-stage endpoints that used to exist (`POST /control-documents/extract/{orgId}`,
+`POST /issues/from-controls/{orgId}`, `POST /issues/classify`,
+`POST /risk-discovery/run`, `POST /risk-scoring/run`, `POST /risk-tagging/run`,
+`POST /risk-assignments/run`) are **no longer available** — every stage now
+only runs as part of this automated pipeline. Two global (non-org-scoped)
+endpoints remain for low-level debugging: `POST /controls/extract` and the
+generic `POST /jobs`. See [Background Jobs](/process/background-jobs) for how
+job types map to pipeline stages, and [System Architecture](/process/architecture)
+for the Celery + RabbitMQ + Redis worker topology.

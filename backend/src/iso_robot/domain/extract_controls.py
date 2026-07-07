@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.domain.heuristics import heuristic_controls_from_text
@@ -498,7 +498,7 @@ async def _report_extract_progress(
 
 async def extract_controls_for_document(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     document_id: str,
     client_org_id: Optional[str] = None,
     *,
@@ -512,7 +512,11 @@ async def extract_controls_for_document(
         raise ValueError(f"Unknown document_id={document_id}")
     path = Path(str(row["path"]))
     if not path.exists():
-        raise FileNotFoundError(str(path))
+        raise FileNotFoundError(
+            f"Document PDF not found at {path}. "
+            "In Docker, set PIPELINE_INGEST_TEMP_DIR under the shared backend/data mount, "
+            "or ingest with save_to_storage=true."
+        )
     if path.suffix.lower() != ".pdf":
         raise ValueError(f"Only PDF extraction is supported; got {path.suffix}")
 
@@ -574,7 +578,7 @@ async def extract_controls_for_document(
 
 async def run_extract_controls_job(
     settings: Settings,
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     payload: dict[str, Any],
     *,
     job_id: Optional[str] = None,
@@ -610,6 +614,8 @@ async def run_extract_controls_job(
                 job_id=job_id,
                 jobs=jobs,
             )
+        except (FileNotFoundError, PermissionError, OSError):
+            raise
         except Exception:
             logger.exception("Extract failed for document %s", doc_id)
             if not settings.use_llm_fallback:

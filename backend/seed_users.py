@@ -2,10 +2,9 @@
 Run from backend/ with PYTHONPATH=src. Dev tool — not used at runtime."""
 import asyncio
 
-import aiosqlite
-
-from iso_robot.config import get_settings
 from iso_robot.helpers.auth import hash_password
+from iso_robot.repositories.database import get_session_factory
+from iso_robot.repositories.migrations import run_migrations
 from iso_robot.repositories.org_repository import OrgRepository, UserRepository
 
 DEMO_USERS = [
@@ -16,12 +15,11 @@ DEMO_USERS = [
 
 
 async def main() -> None:
-    conn = await aiosqlite.connect(str(get_settings().resolved_database_path()))
-    conn.row_factory = aiosqlite.Row
-    await conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        orgs = OrgRepository(conn)
-        users = UserRepository(conn)
+    await run_migrations()
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        orgs = OrgRepository(session)
+        users = UserRepository(session)
         for u in DEMO_USERS:
             org = await orgs.get_by_slug(u["slug"])
             if not org:
@@ -33,8 +31,6 @@ async def main() -> None:
                 full_name=u["full_name"], client_org_id=org["id"], role="analyst",
             )
             print(f"created {u['email']}  ({u['slug']} -> {row['id']})")
-    finally:
-        await conn.close()
 
 
 if __name__ == "__main__":

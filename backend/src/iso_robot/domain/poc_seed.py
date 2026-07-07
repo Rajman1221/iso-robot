@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.domain.poc_import import (
     build_risk_library_seed_entries,
@@ -22,7 +22,7 @@ def curated_csv_path(repo_root: Path) -> Path:
 
 
 async def seed_risk_sources_and_issues(
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     *,
     poc_path: Optional[Path] = None,
 ) -> dict[str, Any]:
@@ -67,7 +67,7 @@ async def seed_risk_sources_and_issues(
 
 
 async def seed_risk_library_catalog(
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     *,
     poc_path: Optional[Path] = None,
     repo_root: Optional[Path] = None,

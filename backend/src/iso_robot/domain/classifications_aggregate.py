@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.repositories.issue_repository import IssueClassificationRepository, IssueRepository
 from iso_robot.repositories.risk_repository import CandidateRiskRepository, RiskDiscoveryResultRepository
@@ -430,7 +430,7 @@ def _geo_card(
 # ---------------------------------------------------------------------------
 
 async def aggregate_classifications(
-    conn: aiosqlite.Connection,
+    conn: AsyncSession,
     *,
     industry: Optional[str] = None,
     region: Optional[str] = None,

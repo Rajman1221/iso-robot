@@ -1,28 +1,24 @@
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from iso_robot.repositories.db import dumps_json
-
-
-def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _loads_json(raw: Any) -> Any:
-    if raw is None or raw == "":
-        return []
-    if isinstance(raw, (dict, list)):
-        return raw
-    try:
-        return json.loads(raw)
-    except Exception:
-        return []
+from iso_robot.models import (
+    ApiAuditLog,
+    BusinessDemography,
+    ClientOrganization,
+    ControlDocument,
+    FolderMapping,
+    IssueScore,
+    OrgHierarchyUser,
+    Risk,
+    TenantMapping,
+    User,
+)
+from iso_robot.models.base import to_dict
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -30,8 +26,8 @@ def _loads_json(raw: Any) -> Any:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class OrgRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def create(
         self,
@@ -42,39 +38,25 @@ class OrgRepository:
         region: Optional[str] = None,
     ) -> dict[str, Any]:
         org_id = str(uuid.uuid4())
-        await self._conn.execute(
-            """
-            INSERT INTO client_organizations (id, name, slug, industry, region, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (org_id, name, slug, industry, region, _now_iso()),
+        self._session.add(
+            ClientOrganization(id=org_id, name=name, slug=slug, industry=industry, region=region)
         )
-        await self._conn.commit()
-        row = await self.get_by_id(org_id)
-        return row  # type: ignore[return-value]
+        await self._session.commit()
+        return await self.get_by_id(org_id)  # type: ignore[return-value]
 
     async def get_by_id(self, org_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            "SELECT id, name, slug, industry, region, created_at FROM client_organizations WHERE id = ?",
-            (org_id,),
-        )
-        row = await cur.fetchone()
-        return dict(row) if row else None
+        obj = await self._session.get(ClientOrganization, org_id)
+        return to_dict(obj) if obj else None
 
     async def get_by_slug(self, slug: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            "SELECT id, name, slug, industry, region, created_at FROM client_organizations WHERE slug = ?",
-            (slug,),
-        )
-        row = await cur.fetchone()
-        return dict(row) if row else None
+        stmt = select(ClientOrganization).where(ClientOrganization.slug == slug)
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return to_dict(obj) if obj else None
 
     async def list_all(self) -> List[dict[str, Any]]:
-        cur = await self._conn.execute(
-            "SELECT id, name, slug, industry, region, created_at FROM client_organizations ORDER BY name"
-        )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        stmt = select(ClientOrganization).order_by(ClientOrganization.name)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -82,8 +64,8 @@ class OrgRepository:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UserRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def create(
         self,
@@ -94,38 +76,28 @@ class UserRepository:
         client_org_id: str,
         role: str = "analyst",
     ) -> dict[str, Any]:
-        user_id = str(uuid.uuid4())
-        await self._conn.execute(
-            """
-            INSERT INTO users (id, email, hashed_password, full_name, client_org_id, role, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-            """,
-            (user_id, email, hashed_password, full_name, client_org_id, role, _now_iso()),
+        self._session.add(
+            User(
+                id=str(uuid.uuid4()),
+                email=email,
+                hashed_password=hashed_password,
+                full_name=full_name,
+                client_org_id=client_org_id,
+                role=role,
+                is_active=True,
+            )
         )
-        await self._conn.commit()
+        await self._session.commit()
         return await self.get_by_email(email)  # type: ignore[return-value]
 
     async def get_by_email(self, email: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, email, hashed_password, full_name, client_org_id, role, is_active, created_at
-            FROM users WHERE email = ?
-            """,
-            (email,),
-        )
-        row = await cur.fetchone()
-        return dict(row) if row else None
+        stmt = select(User).where(User.email == email)
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return to_dict(obj) if obj else None
 
     async def get_by_id(self, user_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, email, hashed_password, full_name, client_org_id, role, is_active, created_at
-            FROM users WHERE id = ?
-            """,
-            (user_id,),
-        )
-        row = await cur.fetchone()
-        return dict(row) if row else None
+        obj = await self._session.get(User, user_id)
+        return to_dict(obj) if obj else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,29 +105,24 @@ class UserRepository:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TenantRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def create(self, *, client_org_id: str, tenant_id: str) -> dict[str, Any]:
-        row_id = str(uuid.uuid4())
-        await self._conn.execute(
-            """
-            INSERT INTO tenant_mapping (id, client_org_id, tenant_id, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(tenant_id) DO NOTHING
-            """,
-            (row_id, client_org_id, tenant_id, _now_iso()),
-        )
-        await self._conn.commit()
+        existing = (
+            await self._session.execute(select(TenantMapping).where(TenantMapping.tenant_id == tenant_id))
+        ).scalars().first()
+        if existing is None:
+            self._session.add(
+                TenantMapping(id=str(uuid.uuid4()), client_org_id=client_org_id, tenant_id=tenant_id)
+            )
+            await self._session.commit()
         return await self.get_by_org(client_org_id)  # type: ignore[return-value]
 
     async def get_by_org(self, client_org_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            "SELECT id, client_org_id, tenant_id, created_at FROM tenant_mapping WHERE client_org_id = ?",
-            (client_org_id,),
-        )
-        row = await cur.fetchone()
-        return dict(row) if row else None
+        stmt = select(TenantMapping).where(TenantMapping.client_org_id == client_org_id)
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return to_dict(obj) if obj else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,8 +130,8 @@ class TenantRepository:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class FolderRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def set_folder_path(
         self,
@@ -173,31 +140,22 @@ class FolderRepository:
         folder_type: str,
         folder_path: str,
     ) -> None:
-        cur = await self._conn.execute(
-            """
-            SELECT id FROM folder_mapping
-            WHERE client_org_id = ? AND folder_type = ?
-            """,
-            (client_org_id, folder_type),
+        stmt = select(FolderMapping).where(
+            FolderMapping.client_org_id == client_org_id, FolderMapping.folder_type == folder_type
         )
-        row = await cur.fetchone()
-        if row:
-            await self._conn.execute(
-                """
-                UPDATE folder_mapping SET folder_path = ?
-                WHERE client_org_id = ? AND folder_type = ?
-                """,
-                (folder_path, client_org_id, folder_type),
-            )
+        existing = (await self._session.execute(stmt)).scalars().first()
+        if existing:
+            existing.folder_path = folder_path
         else:
-            await self._conn.execute(
-                """
-                INSERT INTO folder_mapping (id, client_org_id, folder_type, folder_path, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (str(uuid.uuid4()), client_org_id, folder_type, folder_path, _now_iso()),
+            self._session.add(
+                FolderMapping(
+                    id=str(uuid.uuid4()),
+                    client_org_id=client_org_id,
+                    folder_type=folder_type,
+                    folder_path=folder_path,
+                )
             )
-        await self._conn.commit()
+        await self._session.commit()
 
     async def upsert(self, *, client_org_id: str, folder_type: str, folder_path: str) -> None:
         await self.set_folder_path(
@@ -208,26 +166,33 @@ class FolderRepository:
 
     async def get_folders_for_org(self, client_org_id: str) -> Dict[str, str]:
         """Returns a dict like {'control_documents': '/path/...', 'issues': '/path/...'}"""
-        cur = await self._conn.execute(
-            "SELECT folder_type, folder_path FROM folder_mapping WHERE client_org_id = ?",
-            (client_org_id,),
+        stmt = select(FolderMapping.folder_type, FolderMapping.folder_path).where(
+            FolderMapping.client_org_id == client_org_id
         )
-        rows = await cur.fetchall()
+        rows = (await self._session.execute(stmt)).all()
         return {str(r[0]): str(r[1]) for r in rows}
 
     async def insert_bulk(self, client_org_id: str, folders: Dict[str, str]) -> None:
         """Insert multiple folder types at once during org onboarding."""
+        existing_types = set(
+            (
+                await self._session.execute(
+                    select(FolderMapping.folder_type).where(FolderMapping.client_org_id == client_org_id)
+                )
+            ).scalars().all()
+        )
         for folder_type, folder_path in folders.items():
-            row_id = str(uuid.uuid4())
-            await self._conn.execute(
-                """
-                INSERT INTO folder_mapping (id, client_org_id, folder_type, folder_path, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT DO NOTHING
-                """,
-                (row_id, client_org_id, folder_type, folder_path, _now_iso()),
+            if folder_type in existing_types:
+                continue
+            self._session.add(
+                FolderMapping(
+                    id=str(uuid.uuid4()),
+                    client_org_id=client_org_id,
+                    folder_type=folder_type,
+                    folder_path=folder_path,
+                )
             )
-        await self._conn.commit()
+        await self._session.commit()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -235,8 +200,8 @@ class FolderRepository:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class DemographyRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def upsert(
         self,
@@ -260,96 +225,58 @@ class DemographyRepository:
         regulatory_frameworks: Optional[List[str]] = None,
         notes: Optional[str] = None,
     ) -> dict[str, Any]:
-        existing = await self.get_by_org(client_org_id)
-        if existing:
-            if functions is None:
-                functions = existing.get("functions")
-            if function_catalog is None:
-                function_catalog = existing.get("function_catalog")
-            if employee_hierarchy is None:
-                employee_hierarchy = existing.get("employee_hierarchy")
-            if risk_assignment_rules is None:
-                risk_assignment_rules = existing.get("risk_assignment_rules")
-            if locations is None:
-                locations = existing.get("locations")
-            if processes is None:
-                processes = existing.get("processes")
-            if regulatory_frameworks is None:
-                regulatory_frameworks = existing.get("regulatory_frameworks")
-            row_id = existing["id"]
-        else:
-            row_id = str(uuid.uuid4())
+        stmt = select(BusinessDemography).where(BusinessDemography.client_org_id == client_org_id)
+        existing = (await self._session.execute(stmt)).scalars().first()
 
-        now = _now_iso()
-        await self._conn.execute(
-            """
-            INSERT INTO business_demography (
-              id, client_org_id, industry, sub_industry, employee_count, annual_revenue,
-              headquarters_country, headquarters_city, ownership_type, regulatory_region,
-              website, functions_json, function_catalog, employee_hierarchy,
-              risk_assignment_rules, locations_json, processes_json,
-              regulatory_frameworks_json, notes, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(client_org_id) DO UPDATE SET
-              industry = COALESCE(excluded.industry, industry),
-              sub_industry = COALESCE(excluded.sub_industry, sub_industry),
-              employee_count = COALESCE(excluded.employee_count, employee_count),
-              annual_revenue = COALESCE(excluded.annual_revenue, annual_revenue),
-              headquarters_country = COALESCE(excluded.headquarters_country, headquarters_country),
-              headquarters_city = COALESCE(excluded.headquarters_city, headquarters_city),
-              ownership_type = COALESCE(excluded.ownership_type, ownership_type),
-              regulatory_region = COALESCE(excluded.regulatory_region, regulatory_region),
-              website = COALESCE(excluded.website, website),
-              functions_json = COALESCE(excluded.functions_json, functions_json),
-              function_catalog = COALESCE(excluded.function_catalog, function_catalog),
-              employee_hierarchy = COALESCE(excluded.employee_hierarchy, employee_hierarchy),
-              risk_assignment_rules = COALESCE(excluded.risk_assignment_rules, risk_assignment_rules),
-              locations_json = COALESCE(excluded.locations_json, locations_json),
-              processes_json = COALESCE(excluded.processes_json, processes_json),
-              regulatory_frameworks_json = COALESCE(excluded.regulatory_frameworks_json, regulatory_frameworks_json),
-              notes = COALESCE(excluded.notes, notes),
-              updated_at = excluded.updated_at
-            """,
-            (
-                row_id, client_org_id, industry, sub_industry, employee_count, annual_revenue,
-                headquarters_country, headquarters_city, ownership_type, regulatory_region,
-                website,
-                dumps_json(functions or []),
-                dumps_json(function_catalog or []),
-                dumps_json(employee_hierarchy or []),
-                dumps_json(risk_assignment_rules or []),
-                dumps_json(locations or []),
-                dumps_json(processes or []),
-                dumps_json(regulatory_frameworks or []),
-                notes, now, now,
-            ),
+        if existing is None:
+            existing = BusinessDemography(id=str(uuid.uuid4()), client_org_id=client_org_id)
+            self._session.add(existing)
+
+        existing.industry = industry if industry is not None else existing.industry
+        existing.sub_industry = sub_industry if sub_industry is not None else existing.sub_industry
+        existing.employee_count = employee_count if employee_count is not None else existing.employee_count
+        existing.annual_revenue = annual_revenue if annual_revenue is not None else existing.annual_revenue
+        existing.headquarters_country = (
+            headquarters_country if headquarters_country is not None else existing.headquarters_country
         )
-        await self._conn.commit()
+        existing.headquarters_city = (
+            headquarters_city if headquarters_city is not None else existing.headquarters_city
+        )
+        existing.ownership_type = ownership_type if ownership_type is not None else existing.ownership_type
+        existing.regulatory_region = (
+            regulatory_region if regulatory_region is not None else existing.regulatory_region
+        )
+        existing.website = website if website is not None else existing.website
+        existing.functions_json = functions if functions is not None else (existing.functions_json or [])
+        existing.function_catalog = (
+            function_catalog if function_catalog is not None else (existing.function_catalog or [])
+        )
+        existing.employee_hierarchy = (
+            employee_hierarchy if employee_hierarchy is not None else (existing.employee_hierarchy or [])
+        )
+        existing.risk_assignment_rules = (
+            risk_assignment_rules if risk_assignment_rules is not None else (existing.risk_assignment_rules or [])
+        )
+        existing.locations_json = locations if locations is not None else (existing.locations_json or [])
+        existing.processes_json = processes if processes is not None else (existing.processes_json or [])
+        existing.regulatory_frameworks_json = (
+            regulatory_frameworks if regulatory_frameworks is not None else (existing.regulatory_frameworks_json or [])
+        )
+        existing.notes = notes if notes is not None else existing.notes
+
+        await self._session.commit()
         return await self.get_by_org(client_org_id)  # type: ignore[return-value]
 
     async def get_by_org(self, client_org_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, client_org_id, industry, sub_industry, employee_count, annual_revenue,
-                   headquarters_country, headquarters_city, ownership_type, regulatory_region,
-                   website, functions_json, function_catalog, employee_hierarchy,
-                   risk_assignment_rules, locations_json, processes_json,
-                   regulatory_frameworks_json, notes, created_at, updated_at
-            FROM business_demography WHERE client_org_id = ?
-            """,
-            (client_org_id,),
-        )
-        row = await cur.fetchone()
-        if not row:
+        stmt = select(BusinessDemography).where(BusinessDemography.client_org_id == client_org_id)
+        obj = (await self._session.execute(stmt)).scalars().first()
+        if not obj:
             return None
-        d = dict(row)
-        d["functions"] = _loads_json(d.pop("functions_json", "[]"))
-        d["function_catalog"] = _loads_json(d.pop("function_catalog", "[]"))
-        d["employee_hierarchy"] = _loads_json(d.pop("employee_hierarchy", "[]"))
-        d["risk_assignment_rules"] = _loads_json(d.pop("risk_assignment_rules", "[]"))
-        d["locations"] = _loads_json(d.pop("locations_json", "[]"))
-        d["processes"] = _loads_json(d.pop("processes_json", "[]"))
-        d["regulatory_frameworks"] = _loads_json(d.pop("regulatory_frameworks_json", "[]"))
+        d = to_dict(obj)
+        d["functions"] = d.pop("functions_json", None) or []
+        d["locations"] = d.pop("locations_json", None) or []
+        d["processes"] = d.pop("processes_json", None) or []
+        d["regulatory_frameworks"] = d.pop("regulatory_frameworks_json", None) or []
         return d
 
 
@@ -358,8 +285,8 @@ class DemographyRepository:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ControlDocumentRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def create(
         self,
@@ -373,63 +300,48 @@ class ControlDocumentRepository:
         uploaded_by: Optional[str] = None,
     ) -> dict[str, Any]:
         doc_id = str(uuid.uuid4())
-        await self._conn.execute(
-            """
-            INSERT INTO control_documents (
-              id, client_org_id, filename, document_path, document_type,
-              document_category, document_version, uploaded_by,
-              processing_status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ready_for_extraction', ?)
-            """,
-            (
-                doc_id, client_org_id, filename, document_path,
-                document_type, document_category, document_version,
-                uploaded_by, _now_iso(),
-            ),
+        self._session.add(
+            ControlDocument(
+                id=doc_id,
+                client_org_id=client_org_id,
+                filename=filename,
+                document_path=document_path,
+                document_type=document_type,
+                document_category=document_category,
+                document_version=document_version,
+                uploaded_by=uploaded_by,
+                processing_status="ready_for_extraction",
+            )
         )
-        await self._conn.commit()
+        await self._session.commit()
         return await self.get_by_id(doc_id)  # type: ignore[return-value]
 
     async def get_by_id(self, doc_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, client_org_id, filename, document_path, document_type,
-                   document_category, document_version, uploaded_by,
-                   processing_status, created_at
-            FROM control_documents WHERE id = ?
-            """,
-            (doc_id,),
-        )
-        row = await cur.fetchone()
-        return dict(row) if row else None
+        obj = await self._session.get(ControlDocument, doc_id)
+        return to_dict(obj) if obj else None
 
     async def list_for_org(self, client_org_id: str) -> List[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT id, client_org_id, filename, document_path, document_type,
-                   document_category, document_version, uploaded_by,
-                   processing_status, created_at
-            FROM control_documents WHERE client_org_id = ?
-            ORDER BY datetime(created_at) DESC
-            """,
-            (client_org_id,),
+        stmt = (
+            select(ControlDocument)
+            .where(ControlDocument.client_org_id == client_org_id)
+            .order_by(ControlDocument.created_at.desc())
         )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]
 
     async def update_status(self, doc_id: str, status: str) -> None:
-        await self._conn.execute(
-            "UPDATE control_documents SET processing_status = ? WHERE id = ?",
-            (status, doc_id),
-        )
-        await self._conn.commit()
+        obj = await self._session.get(ControlDocument, doc_id)
+        if obj is None:
+            return
+        obj.processing_status = status
+        await self._session.commit()
 
     async def update_document_path(self, doc_id: str, document_path: str) -> None:
-        await self._conn.execute(
-            "UPDATE control_documents SET document_path = ? WHERE id = ?",
-            (document_path, doc_id),
-        )
-        await self._conn.commit()
+        obj = await self._session.get(ControlDocument, doc_id)
+        if obj is None:
+            return
+        obj.document_path = document_path
+        await self._session.commit()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -437,8 +349,8 @@ class ControlDocumentRepository:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class IssueScoreRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def upsert(
         self,
@@ -457,59 +369,51 @@ class IssueScoreRepository:
         scoring_run_id: Optional[str] = None,
     ) -> dict[str, Any]:
         row_id = str(uuid.uuid4())
-        now = _now_iso()
-        await self._conn.execute(
-            """
-            INSERT INTO issue_scores (
-              id, issue_id, client_org_id, risk_score, risk_rating,
-              likelihood_score, impact_score, velocity_score,
-              mapped_functions_json, mapped_locations_json, mapped_processes_json,
-              recommended_risk_title, scoring_run_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              risk_score = excluded.risk_score,
-              risk_rating = excluded.risk_rating,
-              likelihood_score = excluded.likelihood_score,
-              impact_score = excluded.impact_score,
-              velocity_score = excluded.velocity_score,
-              mapped_functions_json = excluded.mapped_functions_json,
-              mapped_locations_json = excluded.mapped_locations_json,
-              mapped_processes_json = excluded.mapped_processes_json,
-              recommended_risk_title = excluded.recommended_risk_title
-            """,
-            (
-                row_id, issue_id, client_org_id, risk_score, risk_rating,
-                likelihood_score, impact_score, velocity_score,
-                dumps_json(mapped_functions or []),
-                dumps_json(mapped_locations or []),
-                dumps_json(mapped_processes or []),
-                recommended_risk_title, scoring_run_id, now,
-            ),
+        self._session.add(
+            IssueScore(
+                id=row_id,
+                issue_id=issue_id,
+                client_org_id=client_org_id,
+                risk_score=risk_score,
+                risk_rating=risk_rating,
+                likelihood_score=likelihood_score,
+                impact_score=impact_score,
+                velocity_score=velocity_score,
+                mapped_functions_json=mapped_functions or [],
+                mapped_locations_json=mapped_locations or [],
+                mapped_processes_json=mapped_processes or [],
+                recommended_risk_title=recommended_risk_title,
+                scoring_run_id=scoring_run_id,
+            )
         )
-        await self._conn.commit()
-        cur = await self._conn.execute(
-            "SELECT * FROM issue_scores WHERE issue_id = ? ORDER BY datetime(created_at) DESC LIMIT 1",
-            (issue_id,),
-        )
-        row = await cur.fetchone()
-        return dict(row) if row else {}
+        await self._session.commit()
+        obj = await self._session.get(IssueScore, row_id)
+        return to_dict(obj) if obj else {}
 
     async def list_for_org(self, client_org_id: str) -> List[dict[str, Any]]:
-        cur = await self._conn.execute(
-            "SELECT * FROM issue_scores WHERE client_org_id = ? ORDER BY risk_score DESC",
-            (client_org_id,),
+        stmt = (
+            select(IssueScore)
+            .where(IssueScore.client_org_id == client_org_id)
+            .order_by(IssueScore.risk_score.desc())
         )
-        rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Risks (final approved risks)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_TAG_KEYS = (
+    "mapped_controls", "mapped_functions", "mapped_locations", "mapped_processes",
+    "process_tags", "function_tags", "department_tags",
+    "kpi_tags", "region_tags", "control_family_tags",
+)
+
+
 class RiskRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def create(
         self,
@@ -527,67 +431,64 @@ class RiskRepository:
         submitted_by: Optional[str] = None,
     ) -> dict[str, Any]:
         risk_id = str(uuid.uuid4())
-        await self._conn.execute(
-            """
-            INSERT INTO risks (
-              id, client_org_id, issue_id, risk_title, risk_description,
-              risk_rating, risk_score, mapped_controls_json,
-              mapped_functions_json, mapped_locations_json, mapped_processes_json,
-              submitted_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                risk_id, client_org_id, issue_id, risk_title, risk_description,
-                risk_rating, risk_score,
-                dumps_json(mapped_controls or []),
-                dumps_json(mapped_functions or []),
-                dumps_json(mapped_locations or []),
-                dumps_json(mapped_processes or []),
-                submitted_by, _now_iso(),
-            ),
+        self._session.add(
+            Risk(
+                id=risk_id,
+                client_org_id=client_org_id,
+                issue_id=issue_id,
+                risk_title=risk_title,
+                risk_description=risk_description,
+                risk_rating=risk_rating,
+                risk_score=risk_score,
+                mapped_controls_json=mapped_controls or [],
+                mapped_functions_json=mapped_functions or [],
+                mapped_locations_json=mapped_locations or [],
+                mapped_processes_json=mapped_processes or [],
+                submitted_by=submitted_by,
+            )
         )
-        await self._conn.commit()
-        cur = await self._conn.execute("SELECT * FROM risks WHERE id = ?", (risk_id,))
-        row = await cur.fetchone()
-        return dict(row) if row else {}
+        await self._session.commit()
+        obj = await self._session.get(Risk, risk_id)
+        return self._normalize(to_dict(obj)) if obj else {}
+
+    async def _owner_lookup(self, client_org_id: str) -> Dict[str, dict[str, Any]]:
+        """Latest org_hierarchy_users row per user_id for this org (portable
+        replacement for the old ROW_NUMBER()-partitioned SQL join)."""
+        stmt = (
+            select(OrgHierarchyUser)
+            .where(OrgHierarchyUser.client_org_id == client_org_id)
+            .order_by(OrgHierarchyUser.created_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        latest: Dict[str, dict[str, Any]] = {}
+        for r in rows:
+            uid = str(r.user_id)
+            if uid not in latest:
+                latest[uid] = {"name": r.name, "email": r.email, "title": r.title}
+        return latest
 
     async def list_for_org(self, client_org_id: str, limit: int = 1000) -> List[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT r.*,
-                   ou.name AS owner_name, ou.email AS owner_email, ou.title AS owner_title,
-                   au.name AS accountable_name, au.email AS accountable_email, au.title AS accountable_title
-            FROM risks r
-            LEFT JOIN (
-                SELECT user_id, client_org_id, name, email, title,
-                       ROW_NUMBER() OVER (PARTITION BY client_org_id, user_id ORDER BY datetime(created_at) DESC) AS rn
-                FROM org_hierarchy_users
-            ) ou ON ou.user_id = r.owner_user_id AND ou.client_org_id = r.client_org_id AND ou.rn = 1
-            LEFT JOIN (
-                SELECT user_id, client_org_id, name, email, title,
-                       ROW_NUMBER() OVER (PARTITION BY client_org_id, user_id ORDER BY datetime(created_at) DESC) AS rn
-                FROM org_hierarchy_users
-            ) au ON au.user_id = r.accountable_user_id AND au.client_org_id = r.client_org_id AND au.rn = 1
-            WHERE r.client_org_id = ?
-            ORDER BY datetime(r.created_at) DESC LIMIT ?
-            """,
-            (client_org_id, limit),
+        stmt = (
+            select(Risk)
+            .where(Risk.client_org_id == client_org_id)
+            .order_by(Risk.created_at.desc())
+            .limit(limit)
         )
-        rows = await cur.fetchall()
-        return [self._normalize(dict(r)) for r in rows]
+        rows = (await self._session.execute(stmt)).scalars().all()
+        owners = await self._owner_lookup(client_org_id)
+        return [self._normalize(to_dict(r), owners) for r in rows]
 
     async def get_by_id(self, risk_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute("SELECT * FROM risks WHERE id = ?", (risk_id,))
-        row = await cur.fetchone()
-        return self._normalize(dict(row)) if row else None
+        obj = await self._session.get(Risk, risk_id)
+        if not obj:
+            return None
+        owners = await self._owner_lookup(str(obj.client_org_id))
+        return self._normalize(to_dict(obj), owners)
 
     async def count_for_org(self, client_org_id: str) -> int:
-        cur = await self._conn.execute(
-            "SELECT COUNT(*) FROM risks WHERE client_org_id = ?",
-            (client_org_id,),
-        )
-        row = await cur.fetchone()
-        return int(row[0]) if row else 0
+        stmt = select(Risk.id).where(Risk.client_org_id == client_org_id)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return len(rows)
 
     async def update_applied_tags(
         self,
@@ -596,30 +497,17 @@ class RiskRepository:
         tags_by_dimension: Dict[str, List[dict[str, Any]]],
         tag_status: str,
     ) -> None:
-        await self._conn.execute(
-            """
-            UPDATE risks SET
-              process_tags_json = ?,
-              function_tags_json = ?,
-              department_tags_json = ?,
-              kpi_tags_json = ?,
-              region_tags_json = ?,
-              control_family_tags_json = ?,
-              tag_status = ?,
-              updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                dumps_json(tags_by_dimension.get("process") or []),
-                dumps_json(tags_by_dimension.get("function") or []),
-                dumps_json(tags_by_dimension.get("department") or []),
-                dumps_json(tags_by_dimension.get("kpi") or []),
-                dumps_json(tags_by_dimension.get("region") or []),
-                dumps_json(tags_by_dimension.get("control_family") or []),
-                tag_status, _now_iso(), risk_id,
-            ),
-        )
-        await self._conn.commit()
+        obj = await self._session.get(Risk, risk_id)
+        if obj is None:
+            return
+        obj.process_tags_json = tags_by_dimension.get("process") or []
+        obj.function_tags_json = tags_by_dimension.get("function") or []
+        obj.department_tags_json = tags_by_dimension.get("department") or []
+        obj.kpi_tags_json = tags_by_dimension.get("kpi") or []
+        obj.region_tags_json = tags_by_dimension.get("region") or []
+        obj.control_family_tags_json = tags_by_dimension.get("control_family") or []
+        obj.tag_status = tag_status
+        await self._session.commit()
 
     async def update_owner(
         self,
@@ -629,45 +517,38 @@ class RiskRepository:
         accountable_user_id: Optional[str],
         owner_assignment_status: str,
     ) -> None:
-        await self._conn.execute(
-            """
-            UPDATE risks SET
-              owner_user_id = ?,
-              accountable_user_id = ?,
-              owner_assignment_status = ?,
-              updated_at = ?
-            WHERE id = ?
-            """,
-            (owner_user_id, accountable_user_id, owner_assignment_status, _now_iso(), risk_id),
-        )
-        await self._conn.commit()
+        obj = await self._session.get(Risk, risk_id)
+        if obj is None:
+            return
+        obj.owner_user_id = owner_user_id
+        obj.accountable_user_id = accountable_user_id
+        obj.owner_assignment_status = owner_assignment_status
+        await self._session.commit()
 
     @staticmethod
-    def _normalize(row: dict[str, Any]) -> dict[str, Any]:
-        for key in (
-            "mapped_controls", "mapped_functions", "mapped_locations", "mapped_processes",
-            "process_tags", "function_tags", "department_tags",
-            "kpi_tags", "region_tags", "control_family_tags",
-        ):
-            raw = row.pop(f"{key}_json", None)
-            row[key] = _loads_json(raw)
+    def _normalize(row: dict[str, Any], owners: Optional[Dict[str, dict[str, Any]]] = None) -> dict[str, Any]:
+        for key in _TAG_KEYS:
+            row[key] = row.pop(f"{key}_json", None) or []
         row.setdefault("tag_status", "untagged")
         row.setdefault("owner_assignment_status", "unassigned")
 
-        owner_name = row.pop("owner_name", None)
-        owner_email = row.pop("owner_email", None)
-        owner_title = row.pop("owner_title", None)
+        owners = owners or {}
+        owner_id = row.get("owner_user_id")
+        owner_info = owners.get(str(owner_id)) if owner_id else None
         row["owner"] = (
-            {"id": row["owner_user_id"], "name": owner_name, "email": owner_email, "title": owner_title}
-            if row.get("owner_user_id") else None
+            {"id": owner_id, "name": owner_info.get("name") if owner_info else None,
+             "email": owner_info.get("email") if owner_info else None,
+             "title": owner_info.get("title") if owner_info else None}
+            if owner_id else None
         )
 
-        accountable_name = row.pop("accountable_name", None)
-        accountable_email = row.pop("accountable_email", None)
-        accountable_title = row.pop("accountable_title", None)
+        accountable_id = row.get("accountable_user_id")
+        accountable_info = owners.get(str(accountable_id)) if accountable_id else None
         row["accountable"] = (
-            {"id": row["accountable_user_id"], "name": accountable_name, "email": accountable_email, "title": accountable_title}
-            if row.get("accountable_user_id") else None
+            {"id": accountable_id, "name": accountable_info.get("name") if accountable_info else None,
+             "email": accountable_info.get("email") if accountable_info else None,
+             "title": accountable_info.get("title") if accountable_info else None}
+            if accountable_id else None
         )
         return row
 
@@ -677,8 +558,8 @@ class RiskRepository:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AuditLogRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def log(
         self,
@@ -692,24 +573,25 @@ class AuditLogRepository:
         output_metadata: Optional[dict] = None,
         error_details: Optional[str] = None,
     ) -> str:
-        log_id = str(uuid.uuid4())
+        from iso_robot.models.base import utcnow
+
         request_id = str(uuid.uuid4())
-        now = _now_iso()
-        await self._conn.execute(
-            """
-            INSERT INTO api_audit_log (
-              id, request_id, api_name, client_org_id, tenant_id, requested_by,
-              request_timestamp, completion_timestamp, status,
-              input_metadata_json, output_metadata_json, error_details
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                log_id, request_id, api_name, client_org_id, tenant_id, requested_by,
-                now, now, status,
-                dumps_json(input_metadata or {}),
-                dumps_json(output_metadata or {}),
-                error_details,
-            ),
+        now = utcnow()
+        self._session.add(
+            ApiAuditLog(
+                id=str(uuid.uuid4()),
+                request_id=request_id,
+                api_name=api_name,
+                client_org_id=client_org_id,
+                tenant_id=tenant_id,
+                requested_by=requested_by,
+                request_timestamp=now,
+                completion_timestamp=now,
+                status=status,
+                input_metadata_json=input_metadata or {},
+                output_metadata_json=output_metadata or {},
+                error_details=error_details,
+            )
         )
-        await self._conn.commit()
+        await self._session.commit()
         return request_id

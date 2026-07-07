@@ -81,11 +81,15 @@ flowchart TD
     See [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline) and
     [Pipeline API](/api-reference/pipeline).
   </Accordion>
-  <Accordion title="Legacy background jobs (manual / debug)" icon="gears">
-    Individual endpoints still enqueue single-stage jobs via FastAPI
-    `BackgroundTasks` (or Celery task wrappers). Callers poll **`GET /jobs/{jobId}`**
-    per job. Used by the API verification suite and for re-running one stage in
-    isolation. See [Background Jobs](/process/background-jobs).
+  <Accordion title="Legacy background jobs (global, non-org-scoped)" icon="gears">
+    The **org-scoped** per-stage manual triggers
+    (`/control-documents/extract/{orgId}`, `/issues/from-controls/{orgId}`,
+    `/issues/classify`, `/risk-discovery/run`, `/risk-scoring/run`,
+    `/risk-tagging/run`, `/risk-assignments/run`) have been **removed** — those stages now only run inside
+    the automated `/ingest` pipeline. Two global, non-org-scoped endpoints remain
+    for debugging: `POST /controls/extract` and the generic `POST /jobs` (job
+    types `extract_controls`, `classify_issues`, `risk_discovery`, …), both polled
+    via **`GET /jobs/{jobId}`**. See [Background Jobs](/process/background-jobs).
   </Accordion>
 </AccordionGroup>
 
@@ -103,16 +107,18 @@ flowchart LR
     E --> F[risk_discovery]
     F --> G[score_risks]
     G --> H[risk_tagging]
-    H --> I[pipeline.complete]
+    H --> J[risk_owner_assignment]
+    J --> I[pipeline.complete]
 
     classDef stage fill:#0E7490,stroke:#22D3EE,color:#fff
-    class A,B,C,D,E,F,G,H,I stage
+    class A,B,C,D,E,F,G,H,I,J stage
 ```
 
 Each task wraps existing domain functions (`run_extract_controls_job`,
 `run_issues_from_controls_job`, `classify_issues_job`, `aggregate_classifications`,
-`run_risk_discovery`, `score_risks_job`, `run_risk_tagging_job`) — the business
-logic is unchanged; only dispatch and orchestration are new.
+`run_risk_discovery`, `score_risks_job`, `run_risk_tagging_job`,
+`run_risk_owner_assignment_job`) — the business logic is unchanged; only
+dispatch and orchestration are new.
 
 ## Worker queues
 
@@ -120,7 +126,7 @@ logic is unchanged; only dispatch and orchestration are new.
 | --- | --- | --- |
 | `pipeline.orchestrator` | Start run, stage transitions, status updates | Low (1–2 workers) |
 | `pipeline.extract` | Ingest, `extract_controls` | High (PDF / Document Intelligence bound) |
-| `pipeline.llm` | Issues, classify, discovery, tagging | High (OpenAI rate limits) |
+| `pipeline.llm` | Issues, classify, discovery, tagging, owner assignment | High (OpenAI rate limits) |
 | `pipeline.scoring` | `score_risks` | Medium |
 
 Workers are **horizontally scalable** — add more Celery processes per queue as

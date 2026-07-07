@@ -1,54 +1,39 @@
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import aiosqlite
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from iso_robot.repositories.db import dumps_json
+from iso_robot.models import OrgHierarchySnapshot, OrgHierarchyUser, RiskAssignment
+from iso_robot.models.base import to_dict
 
 ASSIGNMENT_STATUSES = ("proposed", "assigned", "needs_review", "rejected")
 ASSIGNMENT_TYPES = ("primary_owner", "accountable_owner", "delegate", "alternate_owner")
 
 
-def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _loads_json(raw: Any, default: Any) -> Any:
-    if raw is None or raw == "":
-        return default
-    if isinstance(raw, (dict, list)):
-        return raw
-    try:
-        return json.loads(raw)
-    except Exception:
-        return default
-
-
 def _row_to_hierarchy_user(row: dict[str, Any]) -> dict[str, Any]:
     out = dict(row)
-    out["ownership_roles"] = _loads_json(out.pop("ownership_roles_json", "[]"), [])
-    out["owned_process_ids"] = _loads_json(out.pop("owned_process_ids_json", "[]"), [])
-    out["owned_kpi_ids"] = _loads_json(out.pop("owned_kpi_ids_json", "[]"), [])
-    out["is_active"] = bool(out.get("is_active", 1))
+    out["ownership_roles"] = out.pop("ownership_roles_json", None) or []
+    out["owned_process_ids"] = out.pop("owned_process_ids_json", None) or []
+    out["owned_kpi_ids"] = out.pop("owned_kpi_ids_json", None) or []
+    out["is_active"] = bool(out.get("is_active", True))
     return out
 
 
 def _row_to_assignment(row: dict[str, Any]) -> dict[str, Any]:
     out = dict(row)
-    out["recommended_owner"] = _loads_json(out.pop("recommended_owner_json", "{}"), {})
-    out["alternate_owners"] = _loads_json(out.pop("alternate_owners_json", "[]"), [])
-    out["matched_on"] = _loads_json(out.pop("matched_on_json", "[]"), [])
-    out["inputs"] = _loads_json(out.pop("inputs_json", "{}"), {})
+    out["recommended_owner"] = out.pop("recommended_owner_json", None) or {}
+    out["alternate_owners"] = out.pop("alternate_owners_json", None) or []
+    out["matched_on"] = out.pop("matched_on_json", None) or []
+    out["inputs"] = out.pop("inputs_json", None) or {}
     return out
 
 
 class OrgHierarchyRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def create_snapshot(
         self,
@@ -58,69 +43,57 @@ class OrgHierarchyRepository:
         source: Optional[str] = None,
     ) -> dict[str, Any]:
         snapshot_id = str(uuid.uuid4())
-        await self._conn.execute(
-            """
-            INSERT INTO org_hierarchy_snapshots (id, client_org_id, snapshot_status, source, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (snapshot_id, client_org_id, snapshot_status, source, _now_iso()),
+        self._session.add(
+            OrgHierarchySnapshot(
+                id=snapshot_id,
+                client_org_id=client_org_id,
+                snapshot_status=snapshot_status,
+                source=source,
+            )
         )
-        await self._conn.commit()
+        await self._session.commit()
         return (await self.get_snapshot(snapshot_id))  # type: ignore[return-value]
 
     async def get_snapshot(self, snapshot_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            "SELECT * FROM org_hierarchy_snapshots WHERE id = ?",
-            (snapshot_id,),
-        )
-        row = await cur.fetchone()
-        return dict(row) if row else None
+        obj = await self._session.get(OrgHierarchySnapshot, snapshot_id)
+        return to_dict(obj) if obj else None
 
     async def latest_approved(self, client_org_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT * FROM org_hierarchy_snapshots
-            WHERE client_org_id = ? AND snapshot_status = 'approved'
-            ORDER BY datetime(created_at) DESC LIMIT 1
-            """,
-            (client_org_id,),
+        stmt = (
+            select(OrgHierarchySnapshot)
+            .where(
+                OrgHierarchySnapshot.client_org_id == client_org_id,
+                OrgHierarchySnapshot.snapshot_status == "approved",
+            )
+            .order_by(OrgHierarchySnapshot.created_at.desc())
+            .limit(1)
         )
-        row = await cur.fetchone()
-        return dict(row) if row else None
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return to_dict(obj) if obj else None
 
     async def insert_users(self, snapshot_id: str, users: List[dict[str, Any]]) -> int:
-        now = _now_iso()
         for u in users:
-            await self._conn.execute(
-                """
-                INSERT INTO org_hierarchy_users (
-                  id, snapshot_id, client_org_id, user_id, name, email, title,
-                  function, department, region, management_level, manager_user_id,
-                  is_active, ownership_roles_json, owned_process_ids_json,
-                  owned_kpi_ids_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(uuid.uuid4()),
-                    snapshot_id,
-                    u["client_org_id"],
-                    u["user_id"],
-                    u.get("name"),
-                    u.get("email"),
-                    u.get("title"),
-                    u.get("function"),
-                    u.get("department"),
-                    u.get("region"),
-                    u.get("management_level"),
-                    u.get("manager_user_id"),
-                    1 if u.get("is_active", True) else 0,
-                    dumps_json(u.get("ownership_roles") or []),
-                    dumps_json(u.get("owned_process_ids") or []),
-                    dumps_json(u.get("owned_kpi_ids") or []),
-                    now,
-                ),
+            self._session.add(
+                OrgHierarchyUser(
+                    id=str(uuid.uuid4()),
+                    snapshot_id=snapshot_id,
+                    client_org_id=u["client_org_id"],
+                    user_id=u["user_id"],
+                    name=u.get("name"),
+                    email=u.get("email"),
+                    title=u.get("title"),
+                    function=u.get("function"),
+                    department=u.get("department"),
+                    region=u.get("region"),
+                    management_level=u.get("management_level"),
+                    manager_user_id=u.get("manager_user_id"),
+                    is_active=bool(u.get("is_active", True)),
+                    ownership_roles_json=u.get("ownership_roles") or [],
+                    owned_process_ids_json=u.get("owned_process_ids") or [],
+                    owned_kpi_ids_json=u.get("owned_kpi_ids") or [],
+                )
             )
-        await self._conn.commit()
+        await self._session.commit()
         return len(users)
 
     async def list_users(
@@ -129,38 +102,34 @@ class OrgHierarchyRepository:
         *,
         include_inactive: bool = False,
     ) -> List[dict[str, Any]]:
-        sql = "SELECT * FROM org_hierarchy_users WHERE snapshot_id = ?"
+        stmt = select(OrgHierarchyUser).where(OrgHierarchyUser.snapshot_id == snapshot_id)
         if not include_inactive:
-            sql += " AND is_active = 1"
-        sql += " ORDER BY name"
-        cur = await self._conn.execute(sql, (snapshot_id,))
-        rows = await cur.fetchall()
-        return [_row_to_hierarchy_user(dict(r)) for r in rows]
+            stmt = stmt.where(OrgHierarchyUser.is_active.is_(True))
+        stmt = stmt.order_by(OrgHierarchyUser.name)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_row_to_hierarchy_user(to_dict(r)) for r in rows]
 
     async def get_user(self, snapshot_id: str, user_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            "SELECT * FROM org_hierarchy_users WHERE snapshot_id = ? AND user_id = ?",
-            (snapshot_id, user_id),
+        stmt = select(OrgHierarchyUser).where(
+            OrgHierarchyUser.snapshot_id == snapshot_id, OrgHierarchyUser.user_id == user_id
         )
-        row = await cur.fetchone()
-        return _row_to_hierarchy_user(dict(row)) if row else None
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return _row_to_hierarchy_user(to_dict(obj)) if obj else None
 
     async def get_user_any_snapshot(self, client_org_id: str, user_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            """
-            SELECT * FROM org_hierarchy_users
-            WHERE client_org_id = ? AND user_id = ?
-            ORDER BY datetime(created_at) DESC LIMIT 1
-            """,
-            (client_org_id, user_id),
+        stmt = (
+            select(OrgHierarchyUser)
+            .where(OrgHierarchyUser.client_org_id == client_org_id, OrgHierarchyUser.user_id == user_id)
+            .order_by(OrgHierarchyUser.created_at.desc())
+            .limit(1)
         )
-        row = await cur.fetchone()
-        return _row_to_hierarchy_user(dict(row)) if row else None
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return _row_to_hierarchy_user(to_dict(obj)) if obj else None
 
 
 class RiskAssignmentRepository:
-    def __init__(self, conn: aiosqlite.Connection) -> None:
-        self._conn = conn
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def insert(
         self,
@@ -180,35 +149,30 @@ class RiskAssignmentRepository:
         auto_applied: bool = False,
     ) -> dict[str, Any]:
         row_id = str(uuid.uuid4())
-        now = _now_iso()
-        await self._conn.execute(
-            """
-            INSERT INTO risk_assignments (
-              id, client_org_id, risk_id, recommended_owner_user_id,
-              recommended_owner_json, alternate_owners_json, assignment_status,
-              confidence, matched_on_json, rationale, inputs_json,
-              hierarchy_snapshot_id, run_job_id, auto_applied, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                row_id, client_org_id, risk_id, recommended_owner_user_id,
-                dumps_json(recommended_owner or {}),
-                dumps_json(alternate_owners or []),
-                assignment_status, confidence,
-                dumps_json(matched_on or []),
-                rationale,
-                dumps_json(inputs or {}),
-                hierarchy_snapshot_id, run_job_id, 1 if auto_applied else 0,
-                now, now,
-            ),
+        self._session.add(
+            RiskAssignment(
+                id=row_id,
+                client_org_id=client_org_id,
+                risk_id=risk_id,
+                recommended_owner_user_id=recommended_owner_user_id,
+                recommended_owner_json=recommended_owner or {},
+                alternate_owners_json=alternate_owners or [],
+                assignment_status=assignment_status,
+                confidence=confidence,
+                matched_on_json=matched_on or [],
+                rationale=rationale,
+                inputs_json=inputs or {},
+                hierarchy_snapshot_id=hierarchy_snapshot_id,
+                run_job_id=run_job_id,
+                auto_applied=auto_applied,
+            )
         )
-        await self._conn.commit()
+        await self._session.commit()
         return (await self.get_by_id(row_id))  # type: ignore[return-value]
 
     async def get_by_id(self, row_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute("SELECT * FROM risk_assignments WHERE id = ?", (row_id,))
-        row = await cur.fetchone()
-        return _row_to_assignment(dict(row)) if row else None
+        obj = await self._session.get(RiskAssignment, row_id)
+        return _row_to_assignment(to_dict(obj)) if obj else None
 
     async def list_for_org(
         self,
@@ -218,34 +182,34 @@ class RiskAssignmentRepository:
         status: Optional[str] = None,
         limit: int = 100,
     ) -> List[dict[str, Any]]:
-        sql = "SELECT * FROM risk_assignments WHERE client_org_id = ?"
-        params: list[Any] = [client_org_id]
+        stmt = select(RiskAssignment).where(RiskAssignment.client_org_id == client_org_id)
         if risk_id:
-            sql += " AND risk_id = ?"
-            params.append(risk_id)
+            stmt = stmt.where(RiskAssignment.risk_id == risk_id)
         if status:
-            sql += " AND assignment_status = ?"
-            params.append(status)
-        sql += " ORDER BY datetime(created_at) DESC LIMIT ?"
-        params.append(limit)
-        cur = await self._conn.execute(sql, tuple(params))
-        rows = await cur.fetchall()
-        return [_row_to_assignment(dict(r)) for r in rows]
+            stmt = stmt.where(RiskAssignment.assignment_status == status)
+        stmt = stmt.order_by(RiskAssignment.created_at.desc()).limit(limit)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_row_to_assignment(to_dict(r)) for r in rows]
 
     async def latest_for_risk(self, risk_id: str) -> Optional[dict[str, Any]]:
-        cur = await self._conn.execute(
-            "SELECT * FROM risk_assignments WHERE risk_id = ? ORDER BY datetime(created_at) DESC LIMIT 1",
-            (risk_id,),
+        stmt = (
+            select(RiskAssignment)
+            .where(RiskAssignment.risk_id == risk_id)
+            .order_by(RiskAssignment.created_at.desc())
+            .limit(1)
         )
-        row = await cur.fetchone()
-        return _row_to_assignment(dict(row)) if row else None
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return _row_to_assignment(to_dict(obj)) if obj else None
 
     async def delete_open_for_risk(self, risk_id: str) -> None:
-        await self._conn.execute(
-            "DELETE FROM risk_assignments WHERE risk_id = ? AND assignment_status IN ('proposed', 'needs_review')",
-            (risk_id,),
+        stmt = select(RiskAssignment).where(
+            RiskAssignment.risk_id == risk_id,
+            RiskAssignment.assignment_status.in_(("proposed", "needs_review")),
         )
-        await self._conn.commit()
+        rows = (await self._session.execute(stmt)).scalars().all()
+        for r in rows:
+            await self._session.delete(r)
+        await self._session.commit()
 
     async def update_review(
         self,
@@ -257,34 +221,29 @@ class RiskAssignmentRepository:
         reviewer_user_id: Optional[str] = None,
         reviewer_notes: Optional[str] = None,
     ) -> None:
-        await self._conn.execute(
-            """
-            UPDATE risk_assignments
-            SET assignment_status = ?,
-                accountable_user_id = COALESCE(?, accountable_user_id),
-                assignment_type = COALESCE(?, assignment_type),
-                reviewer_user_id = ?, reviewer_notes = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                assignment_status, accountable_user_id, assignment_type,
-                reviewer_user_id, reviewer_notes, _now_iso(), row_id,
-            ),
-        )
-        await self._conn.commit()
+        obj = await self._session.get(RiskAssignment, row_id)
+        if obj is None:
+            return
+        obj.assignment_status = assignment_status
+        obj.accountable_user_id = accountable_user_id if accountable_user_id is not None else obj.accountable_user_id
+        obj.assignment_type = assignment_type if assignment_type is not None else obj.assignment_type
+        obj.reviewer_user_id = reviewer_user_id
+        obj.reviewer_notes = reviewer_notes
+        await self._session.commit()
 
     async def count_distinct_risks_by_status(self, client_org_id: str, status: str) -> int:
-        cur = await self._conn.execute(
-            "SELECT COUNT(DISTINCT risk_id) FROM risk_assignments WHERE client_org_id = ? AND assignment_status = ?",
-            (client_org_id, status),
-        )
-        row = await cur.fetchone()
-        return int(row[0]) if row else 0
+        stmt = select(RiskAssignment.risk_id).where(
+            RiskAssignment.client_org_id == client_org_id, RiskAssignment.assignment_status == status
+        ).distinct()
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return len(rows)
 
     async def last_updated_at(self, client_org_id: str) -> Optional[str]:
-        cur = await self._conn.execute(
-            "SELECT MAX(updated_at) FROM risk_assignments WHERE client_org_id = ?",
-            (client_org_id,),
+        stmt = (
+            select(RiskAssignment)
+            .where(RiskAssignment.client_org_id == client_org_id)
+            .order_by(RiskAssignment.updated_at.desc())
+            .limit(1)
         )
-        row = await cur.fetchone()
-        return str(row[0]) if row and row[0] else None
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return to_dict(obj)["updated_at"] if obj else None

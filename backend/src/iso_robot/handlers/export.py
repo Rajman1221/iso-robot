@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 
 from iso_robot.deps import get_db
@@ -28,7 +28,7 @@ def _latest_result_by_candidate(rows: list[dict[str, Any]]) -> dict[str, dict[st
 
 
 async def discovery_export(
-    db: Annotated[aiosqlite.Connection, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> DiscoveryExportResponse:
     doc_repo = DocumentRepository(db)
     ctrl_repo = ControlRepository(db)

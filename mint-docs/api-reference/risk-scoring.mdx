@@ -9,34 +9,15 @@ narrative: [Stage 07 · Risk Scoring](/flow/07-risk-scoring).
 
 ## Run risk scoring
 
-```http
-POST /risk-scoring/run
-```
-
-**Auth:** Bearer · **Job type:** `score_risks`
+<Warning>
+`POST /risk-scoring/run` has been **removed**. Scoring now runs automatically
+as part of `POST /ingest/{clientOrgId}` — and now also **auto-promotes** scored
+issues into `risks` rows. See [Pipeline API](/api-reference/pipeline). You can
+still start it via the generic, non-org-scoped `POST /jobs` (job type
+`score_risks`) for debugging. Requires Azure OpenAI to be configured.
+</Warning>
 
 Scores the listed issues (or all org issues if `issue_ids` is omitted).
-
-### Request
-
-```json
-{
-  "issue_ids": ["uuid"],
-  "controls": ["optional control text"]
-}
-```
-
-### Response `200`
-
-A `JobResponse`.
-
-| HTTP | code |
-| --- | --- |
-| 403 | `FORBIDDEN` (issue not in caller's org) |
-
-<Warning>
-Requires Azure OpenAI to be configured.
-</Warning>
 
 ---
 
@@ -91,6 +72,8 @@ documented in [Stage 07 · Risk Scoring](/flow/07-risk-scoring#the-scoring-matri
 
 ---
 
-## Poll the scoring job
+## Poll the scoring job (legacy `/jobs` path only)
 
-See [Jobs → Poll job status](/api-reference/jobs#poll-job-status).
+See [Jobs → Poll job status](/api-reference/jobs#poll-job-status). Not needed
+when scoring runs inside the automated pipeline — poll
+`GET /pipeline/status/{clientOrgId}` instead.

@@ -632,3 +632,67 @@ class RiskAssessmentResponse(BaseModel):
     model_version: Optional[str] = None
     created_at: str
     assessment: Dict[str, Any]
+
+
+# ── Automated pipeline: POST /ingest/{client_org_id}, GET /pipeline/status/{client_org_id} ──
+
+class IngestDocumentResult(BaseModel):
+    """Per-file outcome of one /ingest call."""
+    filename: str
+    sha256: str
+    document_registry_id: str
+    document_id: Optional[str] = None
+    status: str = Field(description="'queued' (new/force-reprocessed) or 'duplicate' (skipped)")
+    times_seen: int = 1
+
+
+class IngestResponseData(BaseModel):
+    client_org_id: str
+    pipeline_run_id: str
+    celery_task_id: Optional[str] = None
+    status: str
+    save_to_storage: bool
+    force_reprocess: bool
+    total_documents: int
+    new_documents: int
+    skipped_duplicate_documents: int
+    documents: List[IngestDocumentResult] = Field(default_factory=list)
+    status_url: str
+
+
+class PipelineStepStatus(BaseModel):
+    stage: str
+    status: str
+    document_id: Optional[str] = None
+    filename: Optional[str] = None
+    error: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class PipelineStatusData(BaseModel):
+    client_org_id: str
+    pipeline_run_id: str
+    status: str
+    current_stage: str
+    save_to_storage: bool
+    force_reprocess: bool
+    total_documents: int
+    new_documents: int
+    skipped_duplicate_documents: int
+    processed_documents: int
+    failed_documents: int
+    progress_percent: int
+    celery_task_id: Optional[str] = None
+    error: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: str
+    steps: List[PipelineStepStatus] = Field(default_factory=list)
+
+
+class PipelineCancelData(BaseModel):
+    client_org_id: str
+    pipeline_run_id: str
+    status: str
+    error: str

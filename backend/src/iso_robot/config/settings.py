@@ -91,12 +91,121 @@ class Settings(BaseSettings):
                     "request issues a fresh token, resetting this idle timeout.",
     )
 
+    # ── External backend verification (ingest / pipeline-status auth) ──────────
+    verify_api_url: str = Field(
+        default="",
+        description="Existing backend endpoint ISO Robot calls to verify a user's "
+                    "token. Required for the /ingest and /pipeline/status APIs.",
+    )
+    verify_api_key: str = Field(
+        default="",
+        description="Optional API key ISO Robot sends to the verify endpoint "
+                    "(header X-Api-Key) to authenticate itself to the external backend.",
+    )
+    verify_api_timeout_seconds: float = Field(
+        default=10.0,
+        description="HTTP timeout (seconds) for the external verify call.",
+    )
+    external_auth_cache_minutes: int = Field(
+        default=30,
+        description="Sliding TTL (minutes) for a successful external verification. "
+                    "Mirrors jwt_idle_minutes — within this window the same token is "
+                    "trusted without re-calling the external backend.",
+    )
+    verify_api_valid_field: str = Field(
+        default="",
+        description="Optional JSON field in the verify response to assert validity "
+                    "(e.g. 'isValid'). Empty means treat any 2xx response as valid.",
+    )
+    verify_api_valid_value: str = Field(
+        default="",
+        description="Optional expected value (string-compared) for verify_api_valid_field. "
+                    "Empty means the field only needs to be truthy.",
+    )
+    verify_mock: bool = Field(
+        default=False,
+        description="When true, skip the external verify HTTP call for /ingest and "
+                    "/pipeline/status — trust the supplied X-* headers after the org-id "
+                    "match check. Dev/test only; never enable in production.",
+    )
+
+    def require_verify_api_url(self) -> str:
+        """Return the configured verify endpoint or raise if unset."""
+        if not self.verify_api_url:
+            raise RuntimeError(
+                "VERIFY_API_URL is not configured; the /ingest and /pipeline/status "
+                "APIs require it to verify users against the external backend."
+            )
+        return self.verify_api_url
+
     database_path: str = Field(
         default_factory=lambda: str(_backend_root() / "data" / "db.sqlite"),
     )
     documents_dir: str = Field(
         default_factory=lambda: str(_repo_root() / "all-docs"),
     )
+
+    # ── DB-agnostic persistence ─────────────────────────────────────────────────
+    db_uri: str = Field(
+        default="",
+        description="SQLAlchemy async URI, e.g. postgresql+asyncpg://user:pass@host/db, "
+                    "mysql+aiomysql://user:pass@host/db, mssql+aioodbc://user:pass@host/db, "
+                    "or sqlite+aiosqlite:///path/to/file.sqlite. Empty falls back to a "
+                    "sqlite URI built from database_path. Change this ONE value to move "
+                    "the whole app to any supported database.",
+    )
+    db_pool_size: int = Field(default=10, description="SQLAlchemy engine pool size (ignored for SQLite).")
+    db_pool_max_overflow: int = Field(default=20, description="SQLAlchemy engine max overflow (ignored for SQLite).")
+    db_echo_sql: bool = Field(default=False, description="Log every SQL statement (debug only).")
+
+    # ── Automated pipeline (Celery + RabbitMQ + Redis) ──────────────────────────
+    celery_broker_url: str = Field(
+        default="amqp://guest:guest@localhost:5672//",
+        description="RabbitMQ connection URL used as the Celery broker.",
+    )
+    celery_result_backend: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis URL used as the Celery result backend (also backs chord bookkeeping and locks).",
+    )
+    celery_task_always_eager: bool = Field(
+        default=False,
+        description="Run Celery tasks synchronously in-process. Used by tests; never true in production.",
+    )
+    celery_task_soft_time_limit_seconds: int = Field(
+        default=7200,
+        description="Celery soft time limit (seconds) for pipeline tasks. LLM stages like "
+                    "classify_issues can run for hours on large documents.",
+    )
+    celery_task_time_limit_seconds: int = Field(
+        default=7500,
+        description="Celery hard time limit (seconds). Must exceed celery_task_soft_time_limit_seconds.",
+    )
+    pipeline_ingest_temp_dir: str = Field(
+        default="",
+        description="Directory for ephemeral (save_to_storage=false) ingest uploads before extraction. "
+                    "Empty uses the OS temp dir under 'iso-robot-ingest'.",
+    )
+    pipeline_save_to_storage_default: bool = Field(
+        default=False,
+        description="Default value of the ingest 'save_to_storage' flag when the caller omits it.",
+    )
+
+    def resolved_db_uri(self) -> str:
+        """Return the configured DB_URI, or a sqlite+aiosqlite fallback built from database_path.
+
+        This is the single knob for DB portability: point it at Postgres, MySQL,
+        MSSQL, or SQLite and every repository works unchanged.
+        """
+        if self.db_uri:
+            return self.db_uri
+        return f"sqlite+aiosqlite:///{self.resolved_database_path()}"
+
+    def resolved_pipeline_ingest_temp_dir(self) -> Path:
+        if self.pipeline_ingest_temp_dir:
+            return Path(self.pipeline_ingest_temp_dir).expanduser().resolve()
+        import tempfile
+
+        return Path(tempfile.gettempdir()) / "iso-robot-ingest"
     use_llm_fallback: bool = Field(
         default=True,
         description="Use local PDF text + heuristics when Azure OpenAI or Document Intelligence fail.",

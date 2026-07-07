@@ -190,6 +190,33 @@ class Settings(BaseSettings):
         description="Default value of the ingest 'save_to_storage' flag when the caller omits it.",
     )
 
+    # ── Observability (metrics, tracing, structured logging) ───────────────────
+    observability_enabled: bool = Field(
+        default=True,
+        description="Master switch for metrics, tracing, and structured logging. "
+                    "Set false in tests via OBSERVABILITY_ENABLED=false.",
+    )
+    otel_exporter_otlp_endpoint: str = Field(
+        default="http://tempo:4317",
+        description="OTLP gRPC endpoint for distributed traces (Tempo/Jaeger/etc.).",
+    )
+    otel_service_name: str = Field(
+        default="iso-robot-api",
+        description="OpenTelemetry service.name resource attribute.",
+    )
+    metrics_port: int = Field(
+        default=9808,
+        description="Port for the Celery worker Prometheus /metrics exporter.",
+    )
+    prometheus_multiproc_dir: str = Field(
+        default="/tmp/prometheus_multiproc",
+        description="Directory for prometheus_client multiprocess mode (Celery prefork workers).",
+    )
+    log_json: bool = Field(
+        default=True,
+        description="Emit structured JSON logs to stdout. Set false for human-readable dev logs.",
+    )
+
     def resolved_db_uri(self) -> str:
         """Return the configured DB_URI, or a sqlite+aiosqlite fallback built from database_path.
 

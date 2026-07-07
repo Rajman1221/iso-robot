@@ -1,0 +1,51 @@
+{
+  "uid": "iso-rabbitmq-queues",
+  "title": "ISO Robot - RabbitMQ Queues",
+  "tags": ["iso-robot", "rabbitmq"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Queue Depth",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {"expr": "rabbitmq_queue_messages{queue=~\"pipeline\\\\..*\"}", "legendFormat": "{{queue}}", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 2,
+      "title": "Consumers per Queue",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {"expr": "rabbitmq_queue_consumers{queue=~\"pipeline\\\\..*\"}", "legendFormat": "{{queue}}", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 3,
+      "title": "Publish Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {"expr": "sum(rate(rabbitmq_channel_messages_published_total[5m]))", "legendFormat": "published/s", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 4,
+      "title": "DLQ Messages",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {"expr": "rabbitmq_queue_messages{queue=~\".*\\\\.dlq\"}", "legendFormat": "{{queue}}", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    }
+  ]
+}

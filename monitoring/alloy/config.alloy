@@ -1,0 +1,39 @@
+logging {
+  level = "info"
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "iso_robot" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(iso-robot-api|iso-robot-worker-.*)"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_log_stream"]
+    target_label  = "stream"
+  }
+}
+
+loki.source.docker "iso_robot_logs" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.iso_robot.output
+  forward_to = [loki.write.default.receiver]
+}

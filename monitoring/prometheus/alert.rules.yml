@@ -1,0 +1,79 @@
+groups:
+  - name: iso-robot-alerts
+    rules:
+      - alert: HighQueueDepth
+        expr: rabbitmq_queue_messages{queue=~"pipeline\\..*", queue!~".*\\.dlq"} > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High queue depth on {{ $labels.queue }}"
+          description: "Queue {{ $labels.queue }} has {{ $value }} messages for more than 5 minutes."
+
+      - alert: HighQueueLatency
+        expr: rabbitmq_queue_messages_ready{queue=~"pipeline\\..*"} > 0 and rate(rabbitmq_queue_messages_published_total{queue=~"pipeline\\..*"}[5m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue latency on {{ $labels.queue }}"
+          description: "Messages are ready but not being consumed on {{ $labels.queue }}."
+
+      - alert: DeadLetterQueueGrowth
+        expr: increase(rabbitmq_queue_messages{queue=~".*\\.dlq"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DLQ growth on {{ $labels.queue }}"
+          description: "Dead-letter queue {{ $labels.queue }} is growing."
+
+      - alert: CeleryWorkerDown
+        expr: up{job="celery-workers"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Celery worker metrics endpoint down"
+          description: "Worker target {{ $labels.instance }} is unreachable."
+
+      - alert: RepeatedTaskRetries
+        expr: increase(celery_task_retries_total[15m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Repeated Celery task retries for {{ $labels.task }}"
+          description: "Task {{ $labels.task }} retried more than 5 times in 15 minutes."
+
+      - alert: ElevatedAPIErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated API 5xx error rate"
+          description: "More than 5% of API requests are returning 5xx errors."
+
+      - alert: RabbitMQBrokerDown
+        expr: up{job="rabbitmq"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RabbitMQ broker unreachable"
+          description: "RabbitMQ Prometheus endpoint is down."
+
+      - alert: HighTaskFailureRate
+        expr: increase(celery_tasks_failed_total[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Celery task failure rate for {{ $labels.task }}"
+          description: "Task {{ $labels.task }} failed more than 3 times in 15 minutes."

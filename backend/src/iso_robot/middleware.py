@@ -10,6 +10,7 @@ from iso_robot.helpers.auth import create_token, decode_token
 PUBLIC_EXACT = {
     "/",
     "/health",
+    "/metrics",
     "/api/v1/health",
     "/auth/login",
     "/auth/register",

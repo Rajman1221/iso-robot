@@ -9,6 +9,12 @@ x-pipeline-worker: &pipeline-worker
     DATABASE_PATH: /app/backend/data/db.sqlite
     DOCUMENTS_DIR: /app/all-docs
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    LOG_JSON: ${LOG_JSON:-true}
+    OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-true}
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}
+    OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-iso-robot-api}
+    METRICS_PORT: ${METRICS_PORT:-9808}
+    PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
     # Empty DB_URI falls back to the SQLite file above. Point it at Postgres for
     # real worker concurrency, e.g.:
     #   postgresql+asyncpg://iso_robot:iso_robot@postgres:5432/iso_robot
@@ -24,6 +30,7 @@ x-pipeline-worker: &pipeline-worker
     - ./data:/app/data
     - ./all-docs:/app/all-docs
     - "./ISO ROBOT RISK POC.xlsx:/app/ISO ROBOT RISK POC.xlsx:ro"
+    - prometheus_multiproc:/tmp/prometheus_multiproc
   depends_on:
     rabbitmq:
       condition: service_healthy
@@ -57,22 +64,30 @@ services:
   worker-orchestrator:
     <<: *pipeline-worker
     container_name: iso-robot-worker-orchestrator
-    command: celery -A iso_robot.celery_app worker -Q pipeline.orchestrator -c 4 --loglevel=INFO -n orchestrator@%h
+    command: celery -A iso_robot.celery_app worker -Q pipeline.orchestrator -c 4 -E --loglevel=INFO -n orchestrator@%h
+    ports:
+      - "${WORKER_ORCHESTRATOR_METRICS_PORT:-9810}:9808"
 
   worker-extract:
     <<: *pipeline-worker
     container_name: iso-robot-worker-extract
-    command: celery -A iso_robot.celery_app worker -Q pipeline.extract -c 4 --loglevel=INFO -n extract@%h
+    command: celery -A iso_robot.celery_app worker -Q pipeline.extract -c 4 -E --loglevel=INFO -n extract@%h
+    ports:
+      - "${WORKER_EXTRACT_METRICS_PORT:-9811}:9808"
 
   worker-llm:
     <<: *pipeline-worker
     container_name: iso-robot-worker-llm
-    command: celery -A iso_robot.celery_app worker -Q pipeline.llm -c 4 --loglevel=INFO -n llm@%h
+    command: celery -A iso_robot.celery_app worker -Q pipeline.llm -c 4 -E --loglevel=INFO -n llm@%h
+    ports:
+      - "${WORKER_LLM_METRICS_PORT:-9812}:9808"
 
   worker-scoring:
     <<: *pipeline-worker
     container_name: iso-robot-worker-scoring
-    command: celery -A iso_robot.celery_app worker -Q pipeline.scoring -c 2 --loglevel=INFO -n scoring@%h
+    command: celery -A iso_robot.celery_app worker -Q pipeline.scoring -c 2 -E --loglevel=INFO -n scoring@%h
+    ports:
+      - "${WORKER_SCORING_METRICS_PORT:-9813}:9808"
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -80,9 +95,13 @@ services:
     ports:
       - "${RABBITMQ_PORT:-5672}:5672"
       - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+      - "${RABBITMQ_PROMETHEUS_PORT:-15692}:15692"
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-iso_robot}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-iso_robot}
+    command: >
+      sh -c "rabbitmq-plugins enable rabbitmq_management rabbitmq_prometheus &&
+             rabbitmq-server"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -200,6 +219,110 @@ services:
       - minio
     restart: unless-stopped
 
+  # ── Observability stack ─────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: iso-robot-prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: iso-robot-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: iso-robot-tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    ports:
+      - "${TEMPO_HTTP_PORT:-3200}:3200"
+      - "${TEMPO_OTLP_GRPC_PORT:-4317}:4317"
+    volumes:
+      - ./monitoring/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: iso-robot-loki
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    ports:
+      - "${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./monitoring/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki_data:/loki
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.5.1
+    container_name: iso-robot-alloy
+    command: ["run", "/etc/alloy/config.alloy", "--storage.path=/var/lib/alloy"]
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  celery-exporter:
+    image: danihodovic/celery-exporter:0.12.2
+    container_name: iso-robot-celery-exporter
+    ports:
+      - "${CELERY_EXPORTER_PORT:-9809}:9808"
+    environment:
+      CE_BROKER_URL: ${CELERY_BROKER_URL:-amqp://iso_robot:iso_robot@rabbitmq:5672//}
+      CE_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: iso-robot-cadvisor
+    ports:
+      - "${CADVISOR_PORT:-8080}:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: iso-robot-node-exporter
+    ports:
+      - "${NODE_EXPORTER_PORT:-9100}:9100"
+    restart: unless-stopped
+
 volumes:
   etcd_data:
   minio_data:
@@ -207,3 +330,9 @@ volumes:
   rabbitmq_data:
   redis_data:
   postgres_data:
+  prometheus_data:
+  grafana_data:
+  tempo_data:
+  loki_data:
+  alloy_data:
+  prometheus_multiproc:

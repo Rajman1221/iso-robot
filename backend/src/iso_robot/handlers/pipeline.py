@@ -35,7 +35,12 @@ from iso_robot.errors import APIError
 from iso_robot.handlers.pipeline_auth import verify_external_user
 from iso_robot.helpers.org_paths import org_base_dir
 from iso_robot.helpers.verify_cache import VerifiedContext
-from iso_robot.models.pipeline import PIPELINE_STAGES
+from iso_robot.observability.pipeline_progress import (
+    elapsed_seconds,
+    estimate_remaining_seconds,
+    progress_percent,
+    stage_summary,
+)
 from iso_robot.pipeline.orchestrator import enqueue_pipeline
 from iso_robot.pipeline.cleanup import cleanup_ephemeral_uploads
 from iso_robot.repositories.document_repository import DocumentRepository
@@ -254,6 +259,10 @@ async def ingest(
     task_id = enqueue_pipeline(run_id, new_document_ids)
     await run_repo.set_celery_root_task_id(run_id, task_id)
 
+    from iso_robot.observability.context import bind_context
+
+    bind_context(pipeline_run_id=run_id, client_org_id=client_org_id)
+
     return ApiResponse(
         status="accepted",
         message=f"Pipeline run queued: {new_count} new/reprocessed document(s), {skipped_count} duplicate(s) skipped.",
@@ -274,13 +283,7 @@ async def ingest(
 
 
 def _progress_percent(status: str, current_stage: str) -> int:
-    if status == "completed":
-        return 100
-    try:
-        idx = PIPELINE_STAGES.index(current_stage)
-    except ValueError:
-        idx = 0
-    return round(idx / (len(PIPELINE_STAGES) - 1) * 100)
+    return progress_percent(status, current_stage)
 
 
 async def pipeline_status(
@@ -325,6 +328,14 @@ async def pipeline_status(
         for s in raw_steps
     ]
 
+    elapsed = elapsed_seconds(run.get("started_at") or run.get("created_at"))
+    remaining = estimate_remaining_seconds(
+        status=str(run["status"]),
+        current_stage=str(run["current_stage"]),
+        started_at=run.get("started_at") or run.get("created_at"),
+        steps=steps,
+    )
+
     return ApiResponse(
         status="success",
         message="Pipeline status retrieved",
@@ -341,6 +352,9 @@ async def pipeline_status(
             "processed_documents": run["processed_documents"],
             "failed_documents": run["failed_documents"],
             "progress_percent": _progress_percent(run["status"], run["current_stage"]),
+            "elapsed_seconds": round(elapsed, 2) if elapsed is not None else None,
+            "estimated_remaining_seconds": round(remaining, 2) if remaining is not None else None,
+            "stage_summary": stage_summary(steps),
             "celery_task_id": run.get("celery_root_task_id"),
             "error": run.get("error"),
             "started_at": run.get("started_at"),

@@ -37,6 +37,7 @@ os.environ["VERIFY_API_URL"] = "http://verify.invalid/verify"
 os.environ["VERIFY_MOCK"] = "true"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key"
 os.environ["MILVUS_URI"] = "http://milvus.invalid:19530"
+os.environ["OBSERVABILITY_ENABLED"] = "false"
 
 import pytest
 import pytest_asyncio

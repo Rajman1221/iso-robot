@@ -114,6 +114,7 @@ def extract_controls(self, run_id: str, document_id: str) -> dict[str, Any]:
         run = await run_repo.get(run_id)
         if run is None:
             raise ValueError(f"pipeline run {run_id} not found")
+        client_org_id = str(run["client_org_id"])
 
         await run_repo.set_stage(run_id, "extract_controls", status="running")
         step = await steps.create(
@@ -129,7 +130,12 @@ def extract_controls(self, run_id: str, document_id: str) -> dict[str, Any]:
             controls = await ControlRepository(session).get_by_document(document_id)
             await steps.complete(step["id"], result={"controls_extracted": len(controls)})
             await run_repo.increment_processed(run_id, failed=False)
-            return {"document_id": document_id, "controls_extracted": len(controls)}
+            return {
+                "document_id": document_id,
+                "run_id": run_id,
+                "client_org_id": client_org_id,
+                "controls_extracted": len(controls),
+            }
         except _INFRASTRUCTURE_ERRORS as exc:
             logger.exception("extract_controls infrastructure failure for document %s", document_id)
             await steps.fail(step["id"], str(exc))
@@ -141,7 +147,12 @@ def extract_controls(self, run_id: str, document_id: str) -> dict[str, Any]:
             logger.exception("extract_controls failed for document %s", document_id)
             await steps.fail(step["id"], str(exc))
             await run_repo.increment_processed(run_id, failed=True)
-            return {"document_id": document_id, "error": str(exc)}
+            return {
+                "document_id": document_id,
+                "run_id": run_id,
+                "client_org_id": client_org_id,
+                "error": str(exc),
+            }
 
     return run_async(_run)
 

@@ -8,10 +8,10 @@ four queues so worker pools can be scaled independently:
   - pipeline.scoring      — risk scoring
 
 Run workers with, e.g.:
-  celery -A iso_robot.celery_app worker -Q pipeline.orchestrator -c 4
-  celery -A iso_robot.celery_app worker -Q pipeline.extract -c 8
-  celery -A iso_robot.celery_app worker -Q pipeline.llm -c 4
-  celery -A iso_robot.celery_app worker -Q pipeline.scoring -c 4
+  celery -A iso_robot.celery_app worker -Q pipeline.orchestrator -c 4 -E
+  celery -A iso_robot.celery_app worker -Q pipeline.extract -c 8 -E
+  celery -A iso_robot.celery_app worker -Q pipeline.llm -c 4 -E
+  celery -A iso_robot.celery_app worker -Q pipeline.scoring -c 4 -E
 """
 
 from __future__ import annotations
@@ -20,22 +20,54 @@ import asyncio
 from typing import Any, Awaitable, Callable, TypeVar
 
 from celery import Celery
+from kombu import Exchange, Queue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import get_settings
+
+# Register Celery signal handlers (metrics, tracing, worker metrics server).
+import iso_robot.observability.celery_signals  # noqa: F401, E402
 
 T = TypeVar("T")
 
 settings = get_settings()
 
+# Dead-letter exchange + per-queue DLQs for rejected/expired messages.
+DLX_NAME = "pipeline.dlx"
+dead_letter_exchange = Exchange(DLX_NAME, type="direct")
+
+PIPELINE_QUEUES = (
+    "pipeline.orchestrator",
+    "pipeline.extract",
+    "pipeline.llm",
+    "pipeline.scoring",
+)
+
+task_queues = tuple(
+    Queue(
+        name,
+        routing_key=name,
+        durable=True,
+        queue_arguments={
+            "x-dead-letter-exchange": DLX_NAME,
+            "x-dead-letter-routing-key": f"{name}.dlq",
+        },
+    )
+    for name in PIPELINE_QUEUES
+) + tuple(
+    Queue(
+        f"{name}.dlq",
+        exchange=dead_letter_exchange,
+        routing_key=f"{name}.dlq",
+        durable=True,
+    )
+    for name in PIPELINE_QUEUES
+)
+
 celery_app = Celery(
     "iso_robot_pipeline",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    # Deferred import (celery imports this lazily on finalize/worker bootstep,
-    # never at Celery()-construction time) — `iso_robot.pipeline.tasks` imports
-    # `run_async` back from this module, so importing it eagerly here would be
-    # a circular import since `run_async` is defined below.
     include=["iso_robot.pipeline.tasks"],
 )
 
@@ -50,6 +82,7 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     task_track_started=True,
     task_default_queue="pipeline.orchestrator",
+    task_queues=task_queues,
     task_always_eager=settings.celery_task_always_eager,
     task_eager_propagates=settings.celery_task_always_eager,
     task_routes={
@@ -67,16 +100,13 @@ celery_app.conf.update(
     },
     task_time_limit=settings.celery_task_time_limit_seconds,
     task_soft_time_limit=settings.celery_task_soft_time_limit_seconds,
+    worker_send_task_events=True,
+    task_send_sent_event=True,
 )
 
-def run_async(factory: Callable[[AsyncSession], Awaitable[T]]) -> T:
-    """Bridge a sync Celery task body into the async domain layer.
 
-    Every call gets a *fresh* AsyncSession (Celery workers are typically
-    prefork processes, not asyncio event loops, so sessions/engines must not
-    be shared across tasks). `factory` receives that session and returns the
-    coroutine to run.
-    """
+def run_async(factory: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Bridge a sync Celery task body into the async domain layer."""
     from iso_robot.repositories.database import get_session_factory
 
     async def _runner() -> T:

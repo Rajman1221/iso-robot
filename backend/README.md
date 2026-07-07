@@ -266,3 +266,28 @@ Override with env or `.env` when needed.
 | `src/iso_robot/integrations/` | Azure clients |
 | `src/iso_robot/helpers/` | Utilities |
 | `src/iso_robot/config/` | Settings |
+| `src/iso_robot/observability/` | Metrics, tracing, structured logging, Celery signals |
+
+## Observability
+
+With `OBSERVABILITY_ENABLED=true` (default in Docker Compose):
+
+- **API**: `GET /metrics` (Prometheus), `X-Request-Id` on every response, JSON structured logs, OpenTelemetry traces to Tempo.
+- **Celery workers**: per-worker `GET :9808/metrics`, task lifecycle metrics, publish/retry/failure counters, trace propagation via AMQP headers.
+- **RabbitMQ**: built-in Prometheus plugin on `:15692`; per-queue DLQs (`pipeline.*.dlq`) for rejected/expired messages.
+- **Pipeline progress**: `pipeline_runs` gauges + extended `GET /pipeline/status` fields (`elapsed_seconds`, `estimated_remaining_seconds`, `stage_summary`).
+
+Start the full stack (includes Prometheus, Grafana, Tempo, Loki, Alloy):
+
+```bash
+docker compose up --build
+```
+
+| Service | URL |
+|---------|-----|
+| Grafana | http://localhost:3000 (admin/admin) |
+| Prometheus | http://localhost:9090 |
+| RabbitMQ management | http://localhost:15672 |
+| API metrics | http://localhost:8000/metrics |
+
+Provisioned dashboards live under `monitoring/grafana/dashboards/`. Alert rules are in `monitoring/prometheus/alert.rules.yml`.

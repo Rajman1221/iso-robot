@@ -29,13 +29,21 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 # Same function signatures as before, so handlers/auth.py does NOT change.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_token(user_id: str, client_org_id: str, role: str) -> str:
+def create_token(
+    user_id: str,
+    client_org_id: str,
+    role: str,
+    email: str = "",
+    name: str = "",
+) -> str:
     settings = get_settings()
     now = datetime.now(tz=timezone.utc)
     payload = {
         "sub": user_id,
         "org": client_org_id,
         "role": role,
+        "email": email,
+        "name": name,
         "iat": now,
         "exp": now + timedelta(minutes=settings.jwt_idle_minutes),
     }

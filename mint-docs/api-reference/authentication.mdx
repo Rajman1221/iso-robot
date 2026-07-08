@@ -82,6 +82,51 @@ Standard envelope with the created `UserResponse` in `data`.
 
 ---
 
+## Verify token (introspection)
+
+```http
+POST /auth/verify
+```
+
+**Auth:** `X-Api-Key` header (one of `AUTH_INTROSPECTION_KEYS`). Required only when
+that setting is non-empty; leave it empty for open dev access.
+
+Lets a downstream backend check a token ISO Robot issued — without a JWT library
+or shared secret of its own. The check is revocation-aware: a token for a
+disabled or deleted user reports `valid: false`.
+
+### Request
+
+```json
+{ "token": "<JWT>" }
+```
+
+### Response `200`
+
+```json
+{
+  "status": "success",
+  "message": "Token is valid",
+  "data": {
+    "valid": true,
+    "user_id": "uuid",
+    "email": "analyst@demo.local",
+    "client_org_id": "uuid",
+    "role": "analyst",
+    "expires_at": 1751847600
+  }
+}
+```
+
+An invalid, expired, or revoked token returns `200` with `data.valid = false` and
+null identity fields — it is not an error.
+
+| HTTP | code | Meaning |
+| --- | --- | --- |
+| 401 | `UNAUTHORIZED` | Missing or wrong `X-Api-Key` (only when keys are configured) |
+
+---
+
 ## Get current user
 
 ```http

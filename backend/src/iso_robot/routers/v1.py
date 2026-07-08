@@ -81,11 +81,14 @@ router.add_api_route("/discovery-export", export.discovery_export, methods=["GET
 # Auth (API 1)
 router.add_api_route("/auth/login", auth.login, methods=["POST"], tags=["auth"])
 router.add_api_route("/auth/register", auth.register_user, methods=["POST"], tags=["auth"])
+router.add_api_route("/auth/verify", auth.verify_token, methods=["POST"], tags=["auth"])
 router.add_api_route("/auth/me", auth.me, methods=["GET"], tags=["auth"])
 
 # Organisations
 router.add_api_route("/orgs", org.create_org, methods=["POST"], tags=["orgs"])
 router.add_api_route("/orgs", org.list_orgs, methods=["GET"], tags=["orgs"])
+# Unified: create an org + demography in one call, or upsert either afterwards.
+router.add_api_route("/organisation-profile", org.upsert_organisation_profile, methods=["POST"], tags=["orgs"])
 
 # Control Documents (API 2)
 router.add_api_route("/control-documents/upload", org.upload_control_document, methods=["POST"], tags=["control-documents"])

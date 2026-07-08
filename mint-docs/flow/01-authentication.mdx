@@ -23,6 +23,29 @@ later step and keeps each client's data separate.
 Authentication is the gate. Every stage after this one requires a bearer token,
 and almost every record is scoped to the organisation tied to that token.
 
+## ISO Robot is the identity provider
+
+ISO Robot is a backend-to-backend service — there is no first-party frontend.
+**It issues and validates the token itself**, so any number of client backends can
+integrate against it with almost no code of their own. A client backend only ever:
+
+1. **Gets a token** — relays the user's credentials to `POST /auth/login` and keeps
+   the `access_token` it gets back.
+2. **Uses the token** — sends it as `Authorization: Bearer <token>` on every ISO
+   Robot call. ISO Robot validates its own JWT on every route (portal *and*
+   pipeline), so the client passes the token straight through.
+3. **(Optional) Introspects the token** — if the client guards its *own* resources
+   with our token, it calls `POST /auth/verify` to check validity and read the
+   bound identity. No JWT library, key, or shared secret required on their side —
+   just an `X-Api-Key` header.
+
+<Note>
+This replaces the older model where ISO Robot forwarded the caller's token to an
+**external** verify backend. That mode still exists for backward compatibility
+(`AUTH_MODE=external`), but the default `AUTH_MODE=self` makes ISO Robot the
+authority so clients don't have to run their own auth.
+</Note>
+
 ## What happens
 
 A user submits credentials. The service verifies them, issues a **signed JWT**
@@ -60,12 +83,43 @@ sequenceDiagram
 | --- | --- | --- | --- |
 | `POST` | `/auth/login` | **None** | Authenticate, return token + org |
 | `POST` | `/auth/register` | **None** | Create a user (demo / admin) |
+| `POST` | `/auth/verify` | `X-Api-Key` | Introspect a token → `{ valid, user_id, client_org_id, role, … }` |
 | `GET` | `/auth/me` | Bearer | Return the logged-in user's profile |
 
 <Note>
-`/auth/login`, `/auth/register`, and the health checks are the **only** public
-routes. Everything else returns `401 UNAUTHORIZED` without a valid bearer token.
+`/auth/login`, `/auth/register`, `/auth/verify`, and the health checks are the
+**only** routes reachable without a session bearer token. Everything else returns
+`401 UNAUTHORIZED` without a valid one. (`/auth/verify` authenticates the calling
+backend with the `X-Api-Key` header instead — see `AUTH_INTROSPECTION_KEYS`.)
 </Note>
+
+### Token introspection
+
+A downstream backend that received one of our tokens can check it without any
+crypto of its own:
+
+```json
+POST /auth/verify          // header: X-Api-Key: <your client key>
+{ "token": "<JWT>" }
+```
+
+```json
+{
+  "status": "success",
+  "data": {
+    "valid": true,
+    "user_id": "uuid",
+    "email": "analyst@demo.local",
+    "client_org_id": "uuid",
+    "role": "analyst",
+    "expires_at": 1751847600
+  }
+}
+```
+
+An expired, malformed, or revoked (disabled-user) token is a normal
+`{ "valid": false }` result with HTTP `200` — not an error. Only a missing or wrong
+`X-Api-Key` returns `401`.
 
 ### Login request
 

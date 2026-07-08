@@ -7,6 +7,8 @@ from starlette.responses import JSONResponse, Response
 from iso_robot.helpers.auth import create_token, decode_token
 
 # Paths reachable WITHOUT a valid session.
+# `/auth/verify` (token introspection) authenticates itself via an X-Api-Key and
+# the token in its body — not via a session — so it bypasses this checkpoint.
 PUBLIC_EXACT = {
     "/",
     "/health",
@@ -14,14 +16,16 @@ PUBLIC_EXACT = {
     "/api/v1/health",
     "/auth/login",
     "/auth/register",
+    "/auth/verify",
     "/api/v1/auth/login",
     "/api/v1/auth/register",
+    "/api/v1/auth/verify",
 }
 PUBLIC_PREFIXES = ("/docs", "/redoc", "/openapi.json")
 
-# Paths authenticated against the EXTERNAL backend (not ISO Robot's own JWT).
-# They carry the existing-backend token and are protected by the
-# `verify_external_user` dependency, so the JWT session checkpoint must skip them.
+# The pipeline APIs run their own auth in the `authenticate_pipeline_request`
+# dependency (self-mode: our JWT; external-mode: the external verify backend),
+# so this middleware's session checkpoint skips them either way.
 EXTERNAL_AUTH_PREFIXES = ("/api/v1/ingest", "/api/v1/pipeline/status", "/api/v1/pipeline/cancel")
 
 
@@ -59,6 +63,10 @@ class SessionValidationMiddleware(BaseHTTPMiddleware):
         request.state.user_claims = claims          # hand the validated claims to handlers
         response = await call_next(request)
         response.headers["X-Refresh-Token"] = create_token(  # sliding window
-            claims["sub"], claims.get("org", ""), claims.get("role", "")
+            claims["sub"],
+            claims.get("org", ""),
+            claims.get("role", ""),
+            email=claims.get("email", ""),
+            name=claims.get("name", ""),
         )
         return response

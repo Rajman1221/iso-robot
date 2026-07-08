@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 
-from iso_robot.config import get_settings
-from iso_robot.deps import get_folder_repo, get_org_repo, get_tenant_repo, get_user_repo, get_audit_repo, get_current_user
+from iso_robot.config import Settings, get_settings
+from iso_robot.deps import get_app_settings, get_folder_repo, get_org_repo, get_tenant_repo, get_user_repo, get_audit_repo, get_current_user
 from iso_robot.domain.repair_storage_paths import sync_org_folder_mapping
 from iso_robot.errors import APIError
-from iso_robot.helpers.auth import create_token, hash_password, verify_password
+from iso_robot.helpers.auth import create_token, decode_token, hash_password, verify_password
 from iso_robot.repositories.org_repository import (
     AuditLogRepository,
     FolderRepository,
@@ -23,6 +23,8 @@ from iso_robot.schemas.api import (
     LoginRequest,
     UserCreateRequest,
     UserResponse,
+    VerifyTokenData,
+    VerifyTokenRequest,
 )
 
 
@@ -73,7 +75,13 @@ async def login(
     )
 
     # Create token
-    token = create_token(user["id"], user["client_org_id"], user["role"])
+    token = create_token(
+        user["id"],
+        user["client_org_id"],
+        user["role"],
+        email=user["email"],
+        name=user.get("full_name") or "",
+    )
 
     # Audit log
     await audit_repo.log(
@@ -139,6 +147,71 @@ async def register_user(
             created_at=user["created_at"],
         ).model_dump(),
     )
+
+async def verify_token(
+    body: VerifyTokenRequest,
+    request: Request,
+    user_repo: Annotated[UserRepository, Depends(get_user_repo)],
+    settings: Annotated[Settings, Depends(get_app_settings)],
+    audit_repo: Annotated[AuditLogRepository, Depends(get_audit_repo)],
+) -> ApiResponse:
+    """Token introspection for downstream backends.
+
+    A client backend that received one of our tokens can POST it here to check
+    whether it is still valid and read the bound identity — without needing any
+    JWT library or shared secret of its own. Callers authenticate themselves
+    with the `X-Api-Key` header (see AUTH_INTROSPECTION_KEYS).
+
+    Always returns HTTP 200 with ``data.valid`` telling the caller the outcome;
+    an invalid/expired/revoked token is a normal ``valid: false`` result, not an
+    error. (A wrong/missing X-Api-Key is the only case that raises 401.)
+    """
+    allowed = settings.introspection_keys()
+    if allowed:
+        supplied = (request.headers.get("x-api-key") or "").strip()
+        if supplied not in allowed:
+            raise APIError(
+                "Missing or invalid X-Api-Key",
+                code="UNAUTHORIZED",
+                status_code=401,
+            )
+
+    def _invalid() -> ApiResponse:
+        return ApiResponse(
+            status="success",
+            message="Token is not valid",
+            data=VerifyTokenData(valid=False).model_dump(),
+        )
+
+    claims = decode_token(body.token)
+    if not claims or "sub" not in claims:
+        return _invalid()
+
+    # Revocation-aware: the user must still exist and be active.
+    user = await user_repo.get_by_id(claims["sub"])
+    if not user or not user.get("is_active", 1):
+        return _invalid()
+
+    await audit_repo.log(
+        api_name="verify_token",
+        client_org_id=user["client_org_id"],
+        requested_by=user["id"],
+        status="success",
+    )
+
+    return ApiResponse(
+        status="success",
+        message="Token is valid",
+        data=VerifyTokenData(
+            valid=True,
+            user_id=user["id"],
+            email=user["email"],
+            client_org_id=user["client_org_id"],
+            role=user["role"],
+            expires_at=claims.get("exp"),
+        ).model_dump(),
+    )
+
 
 async def me(
     current_user: Annotated[dict, Depends(get_current_user)],

@@ -33,6 +33,11 @@ os.environ["PIPELINE_INGEST_TEMP_DIR"] = str(_TEST_ROOT / "ingest-tmp")
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "true"
 os.environ["CELERY_BROKER_URL"] = "memory://"
 os.environ["CELERY_RESULT_BACKEND"] = "cache+memory://"
+# The ingest/pipeline suite (test_ingest_endpoints.py) exercises the legacy
+# external-verify contract, so pin the process to that mode. Self-mode auth (the
+# shipped default) is covered explicitly by test_pipeline_self_auth.py, which
+# flips settings.auth_mode per test.
+os.environ["AUTH_MODE"] = "external"
 os.environ["VERIFY_API_URL"] = "http://verify.invalid/verify"
 os.environ["VERIFY_MOCK"] = "true"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key"

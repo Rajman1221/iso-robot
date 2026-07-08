@@ -53,6 +53,30 @@ class OrgRepository:
         obj = (await self._session.execute(stmt)).scalars().first()
         return to_dict(obj) if obj else None
 
+    async def update(
+        self,
+        org_id: str,
+        *,
+        name: Optional[str] = None,
+        slug: Optional[str] = None,
+        industry: Optional[str] = None,
+        region: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Update only the fields that are provided (non-None); leave the rest."""
+        obj = await self._session.get(ClientOrganization, org_id)
+        if obj is None:
+            return None
+        if name is not None:
+            obj.name = name
+        if slug is not None:
+            obj.slug = slug
+        if industry is not None:
+            obj.industry = industry
+        if region is not None:
+            obj.region = region
+        await self._session.commit()
+        return await self.get_by_id(org_id)
+
     async def list_all(self) -> List[dict[str, Any]]:
         stmt = select(ClientOrganization).order_by(ClientOrganization.name)
         rows = (await self._session.execute(stmt)).scalars().all()

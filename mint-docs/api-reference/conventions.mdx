@@ -44,6 +44,9 @@ Authorization: Bearer <access_token>
 Obtain the token from [`POST /auth/login`](/api-reference/authentication). The
 login response also returns the `client_org_id` that scopes most resources.
 
+Tokens last **60 days** by default (`JWT_IDLE_MINUTES=86400`). Each authenticated
+response may include `X-Refresh-Token` with a renewed JWT (sliding window).
+
 ## Response envelope
 
 Most write/detail endpoints wrap their payload in a standard envelope:

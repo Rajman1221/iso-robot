@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c5f74daa-904f-4817-9aaf-a1e7dbd344db",
     "name": "ISO-Robot - API Verification",
-    "description": "# ISO Robot API v1\n\n**Base URL:** `{{baseUrl}}` → `http://localhost:8000/api/v1`\n**Host root:** `{{stageURL}}` → `http://localhost:8000`\n\n## Quick start (automated pipeline — Docker)\n\n1. Set `VERIFY_MOCK=true` in repo `.env` (see `.env.docker.example`), then `docker compose up --build`\n2. **01 Auth → Login (Analyst)** — saves `token`, `clientOrgId`, and all `external*` vars for pipeline auth\n3. *(One-time if library empty)* **06 Risk Discovery → Seed risk library**\n4. If blocked by `409 PIPELINE_RUN_IN_PROGRESS`, run **Automated Pipeline → Cancel active pipeline run**\n5. **Automated Pipeline → Ingest documents** — attach `backend/fixtures/sample_control.pdf`, returns 202 + `pipelineRunId`\n6. **Automated Pipeline → Pipeline status (latest run)** — re-send until `status` = `completed`\n7. **11 Fetch Latest Data** + **10 Risk Owner Assignment** GETs to verify outputs\n\nRe-import this file from the **repo root** after updates — do not use an old Downloads copy.\n\n## Authentication\n\n| Route | Auth |\n|-------|------|\n| `POST /auth/login`, `GET /health` | **None** |\n| `POST /ingest/{clientOrgId}`, `GET /pipeline/status/{clientOrgId}` | External auth headers (auto-filled by Login when `VERIFY_MOCK=true`) |\n| Everything else | `Authorization: Bearer {{token}}` |\n\nLogin sets: `token`, `clientOrgId`, `externalToken`, `externalUserId`, `externalUserEmail`.\n\n## End-to-end flow\n\n```mermaid\nflowchart TD\n    A[Login] --> B[Ingest PDF]\n    B --> C[\"Poll pipeline status\"]\n    C --> D[Fetch Latest Data GETs]\n    D --> E[Owner recommendations]\n    E --> F[Chatbot optional]\n```\n\n## Error format\n\n```json\n{ \"detail\": \"Human message\", \"code\": \"ERROR_CODE\" }\n```\n\n| HTTP | code | Meaning |\n|------|------|---------|\n| 401 | UNAUTHORIZED | Missing/invalid Bearer header |\n| 403 | FORBIDDEN | Org mismatch |\n| 404 | PIPELINE_RUN_NOT_FOUND | No runs yet or bad pipeline_run_id |\n| 409 | PIPELINE_RUN_IN_PROGRESS | Another ingest still active |\n\n## Remaining job endpoints\n\nChatbot reindex (`POST /chatbot/reindex`) and Reference/Legacy debug endpoints still use the background job pattern: start → poll `GET /jobs/{jobId}`.\n",
+    "description": "# ISO Robot API v1\n\n**Base URL:** `{{baseUrl}}` → `http://localhost:8000/api/v1`\n**Host root:** `{{stageURL}}` → `http://localhost:8000`\n\n## Quick start (automated pipeline — Docker)\n\n1. `docker compose up --build` (default `AUTH_MODE=self` — no extra auth env needed)\n2. **01 Auth → Login (Analyst)** — saves `token` and `clientOrgId`\n3. *(One-time if library empty)* **06 Risk Discovery → Seed risk library**\n4. If blocked by `409 PIPELINE_RUN_IN_PROGRESS`, run **Automated Pipeline → Cancel active pipeline run**\n5. **Automated Pipeline → Ingest documents** — attach `backend/fixtures/sample_control.pdf`, returns 202 + `pipelineRunId`\n6. **Automated Pipeline → Pipeline status (latest run)** — re-send until `status` = `completed`\n7. **11 Fetch Latest Data** + **10 Risk Owner Assignment** GETs to verify outputs\n\nRe-import this file from the **repo root** after updates — do not use an old Downloads copy.\n\n## Authentication (AUTH_MODE=self, default)\n\nISO Robot issues and validates its own JWT. **Every protected route — including the pipeline — uses the same login token.**\n\n| Route | Auth |\n|-------|------|\n| `POST /auth/login`, `GET /health` | **None** |\n| `POST /ingest/{clientOrgId}`, `GET /pipeline/status/{clientOrgId}`, `POST /pipeline/cancel/{clientOrgId}` | `Authorization: Bearer {{token}}` (from Login; user's org must match path) |\n| Everything else | `Authorization: Bearer {{token}}` |\n\nLogin sets: `token`, `clientOrgId`.\n\nLegacy `AUTH_MODE=external` (optional): pipeline instead requires `X-User-Id`, `X-User-Email`, `X-Org-Id` plus an external token — not used by this collection.\n\n## End-to-end flow\n\n```mermaid\nflowchart TD\n    A[Login] --> B[Ingest PDF]\n    B --> C[\"Poll pipeline status\"]\n    C --> D[Fetch Latest Data GETs]\n    D --> E[Owner recommendations]\n    E --> F[Chatbot optional]\n```\n\n## Error format\n\n```json\n{ \"detail\": \"Human message\", \"code\": \"ERROR_CODE\" }\n```\n\n| HTTP | code | Meaning |\n|------|------|---------|\n| 401 | UNAUTHORIZED | Missing/invalid Bearer header |\n| 403 | FORBIDDEN | Org mismatch |\n| 404 | PIPELINE_RUN_NOT_FOUND | No runs yet or bad pipeline_run_id |\n| 409 | PIPELINE_RUN_IN_PROGRESS | Another ingest still active |\n\n## Remaining job endpoints\n\nChatbot reindex (`POST /chatbot/reindex`) and Reference/Legacy debug endpoints still use the background job pattern: start → poll `GET /jobs/{jobId}`.\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "25305867"
   },
@@ -81,12 +81,7 @@
                   "const d = (pm.response.json().data || pm.response.json());",
                   "pm.collectionVariables.set('token', d.access_token);",
                   "if (d.client_org_id) pm.collectionVariables.set('clientOrgId', d.client_org_id);",
-                  "if (d.user_id) pm.collectionVariables.set('externalUserId', d.user_id);",
-                  "pm.collectionVariables.set('externalToken', 'verify-mock-dev');",
-                  "try {",
-                  "  const body = JSON.parse(pm.request.body.raw);",
-                  "  if (body.username) pm.collectionVariables.set('externalUserEmail', body.username);",
-                  "} catch (_) {}"
+                  "if (d.user_id) pm.collectionVariables.set('userId', d.user_id);"
                 ],
                 "type": "text/javascript",
                 "packages": {},
@@ -145,12 +140,7 @@
                   "const d = (pm.response.json().data || pm.response.json());",
                   "pm.collectionVariables.set('token', d.access_token);",
                   "if (d.client_org_id) pm.collectionVariables.set('clientOrgId', d.client_org_id);",
-                  "if (d.user_id) pm.collectionVariables.set('externalUserId', d.user_id);",
-                  "pm.collectionVariables.set('externalToken', 'verify-mock-dev');",
-                  "try {",
-                  "  const body = JSON.parse(pm.request.body.raw);",
-                  "  if (body.username) pm.collectionVariables.set('externalUserEmail', body.username);",
-                  "} catch (_) {}"
+                  "if (d.user_id) pm.collectionVariables.set('userId', d.user_id);"
                 ],
                 "type": "text/javascript",
                 "packages": {},
@@ -280,7 +270,7 @@
           "response": []
         }
       ],
-      "description": "**Step 1.** Login is public. Saves `token`, `clientOrgId`, and pipeline external-auth vars (`externalToken`, `externalUserId`, `externalUserEmail`) for **Automated Pipeline** ingest/status. All other folders use Bearer `{{token}}`."
+      "description": "**Step 1.** Login is public. Saves `token` and `clientOrgId`. The same token is used for **Automated Pipeline** ingest/status/cancel and all other protected routes (`AUTH_MODE=self`)."
     },
     {
       "name": "Automated Pipeline (Ingest + Status)",
@@ -302,32 +292,17 @@
           ],
           "request": {
             "auth": {
-              "type": "noauth"
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
             },
             "method": "POST",
             "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{externalToken}}",
-                "type": "text",
-                "description": "Token issued by the EXISTING backend, not ISO Robot's own JWT ({{token}})."
-              },
-              {
-                "key": "X-User-Id",
-                "value": "{{externalUserId}}",
-                "type": "text"
-              },
-              {
-                "key": "X-User-Email",
-                "value": "{{externalUserEmail}}",
-                "type": "text"
-              },
-              {
-                "key": "X-Org-Id",
-                "value": "{{clientOrgId}}",
-                "type": "text",
-                "description": "Must equal the {clientOrgId} path segment or the request is rejected with 403 FORBIDDEN."
-              },
               {
                 "key": "Accept",
                 "value": "application/json",
@@ -368,7 +343,7 @@
                 "{{clientOrgId}}"
               ]
             },
-            "description": "## Purpose\nThe **single entry point** for the automated pipeline. Uploading here automatically runs: control extraction → issue synthesis → classification → chart aggregation → risk discovery → risk scoring (+ auto-promotion to `risks`) → risk tagging (`auto_apply: true`) → risk owner assignment (`auto_apply: true`).\n\n## PDF file\nUse Postman's file picker to attach a PDF. For Docker/local testing, select `backend/fixtures/sample_control.pdf` from your repo clone.\n\n## Docker note\nEphemeral uploads (`save_to_storage=false`) require `PIPELINE_INGEST_TEMP_DIR=/app/backend/data/ingest-tmp` on api + workers (set in docker-compose).\n\n## Auth\nAuto-filled by **01 Auth → Login** (`externalToken`, `externalUserId`, `externalUserEmail`, `clientOrgId`). Server must have `VERIFY_MOCK=true` for local Docker.\n\n## Then\nPoll **Pipeline status (latest run)** until `status` = `completed` or `failed`."
+            "description": "## Purpose\nThe **single entry point** for the automated pipeline. Uploading here automatically runs: control extraction → issue synthesis → classification → chart aggregation → risk discovery → risk scoring (+ auto-promotion to `risks`) → risk tagging (`auto_apply: true`) → risk owner assignment (`auto_apply: true`).\n\n## PDF file\nUse Postman's file picker to attach a PDF. For Docker/local testing, select `backend/fixtures/sample_control.pdf` from your repo clone.\n\n## Docker note\nEphemeral uploads (`save_to_storage=false`) require `PIPELINE_INGEST_TEMP_DIR=/app/backend/data/ingest-tmp` on api + workers (set in docker-compose).\n\n## Auth\n`Authorization: Bearer {{token}}` from **01 Auth → Login**. The logged-in user's `client_org_id` must match `{{clientOrgId}}` in the path (403 if not).\n\n## Then\nPoll **Pipeline status (latest run)** until `status` = `completed` or `failed`."
           },
           "response": []
         },
@@ -389,30 +364,17 @@
           ],
           "request": {
             "auth": {
-              "type": "noauth"
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
             },
             "method": "POST",
             "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{externalToken}}",
-                "type": "text"
-              },
-              {
-                "key": "X-User-Id",
-                "value": "{{externalUserId}}",
-                "type": "text"
-              },
-              {
-                "key": "X-User-Email",
-                "value": "{{externalUserEmail}}",
-                "type": "text"
-              },
-              {
-                "key": "X-Org-Id",
-                "value": "{{clientOrgId}}",
-                "type": "text"
-              },
               {
                 "key": "Accept",
                 "value": "application/json",
@@ -432,7 +394,7 @@
                 "{{clientOrgId}}"
               ]
             },
-            "description": "## Purpose\nMark the org's active (`queued`/`running`) pipeline run as **failed** and release the one-active-run-per-org lock.\n\nUse when a run is stuck (e.g. after a worker crash) or you need to retry ingest without waiting.\n\n## Auth\nSame external-backend headers as **Ingest documents** (auto-filled by Login).\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"pipeline_run_id\": \"...\",\n    \"status\": \"failed\",\n    \"error\": \"Cancelled by user\"\n  }\n}\n```\n\n## Errors\n404 `NO_ACTIVE_PIPELINE_RUN` — nothing to cancel\n\n## Then\nRun **Ingest documents** again."
+            "description": "## Purpose\nMark the org's active (`queued`/`running`) pipeline run as **failed** and release the one-active-run-per-org lock.\n\nUse when a run is stuck (e.g. after a worker crash) or you need to retry ingest without waiting.\n\n## Auth\nSame as **Ingest documents**: `Authorization: Bearer {{token}}` from Login.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"pipeline_run_id\": \"...\",\n    \"status\": \"failed\",\n    \"error\": \"Cancelled by user\"\n  }\n}\n```\n\n## Errors\n404 `NO_ACTIVE_PIPELINE_RUN` — nothing to cancel\n\n## Then\nRun **Ingest documents** again."
           },
           "response": []
         },
@@ -440,30 +402,17 @@
           "name": "Pipeline status (latest run)",
           "request": {
             "auth": {
-              "type": "noauth"
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
             },
             "method": "GET",
             "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{externalToken}}",
-                "type": "text"
-              },
-              {
-                "key": "X-User-Id",
-                "value": "{{externalUserId}}",
-                "type": "text"
-              },
-              {
-                "key": "X-User-Email",
-                "value": "{{externalUserEmail}}",
-                "type": "text"
-              },
-              {
-                "key": "X-Org-Id",
-                "value": "{{clientOrgId}}",
-                "type": "text"
-              },
               {
                 "key": "Accept",
                 "value": "application/json",
@@ -483,7 +432,7 @@
                 "{{clientOrgId}}"
               ]
             },
-            "description": "## Purpose\nUnified progress for this org's **most recent** ingest run (no `pipeline_run_id` query param). Same external auth as **Ingest documents** above.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"client_org_id\": \"...\",\n    \"pipeline_run_id\": \"uuid\",\n    \"status\": \"queued|running|completed|failed\",\n    \"current_stage\": \"ingest_register|extract_controls|issues_from_controls|classify_issues|generate_charts|risk_discovery|score_risks|risk_tagging|risk_owner_assignment|complete\",\n    \"save_to_storage\": false,\n    \"force_reprocess\": false,\n    \"total_documents\": 1,\n    \"new_documents\": 1,\n    \"skipped_duplicate_documents\": 0,\n    \"processed_documents\": 1,\n    \"failed_documents\": 0,\n    \"progress_percent\": 100,\n    \"celery_task_id\": \"...\",\n    \"error\": null,\n    \"started_at\": \"...\",\n    \"completed_at\": \"...\",\n    \"created_at\": \"...\",\n    \"steps\": [\n      { \"stage\": \"extract_controls\", \"status\": \"completed\", \"document_id\": \"...\", \"filename\": \"policy.pdf\", \"error\": null, \"started_at\": \"...\", \"completed_at\": \"...\" }\n    ]\n  }\n}\n```\n\n## Errors\n401/403 (same as ingest) · 404 CLIENT_ORG_NOT_FOUND · 404 PIPELINE_RUN_NOT_FOUND (no runs yet for this org — POST /ingest first)"
+            "description": "## Purpose\nUnified progress for this org's **most recent** ingest run (no `pipeline_run_id` query param). Auth: `Authorization: Bearer {{token}}` from Login.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"client_org_id\": \"...\",\n    \"pipeline_run_id\": \"uuid\",\n    \"status\": \"queued|running|completed|failed\",\n    \"current_stage\": \"ingest_register|extract_controls|issues_from_controls|classify_issues|generate_charts|risk_discovery|score_risks|risk_tagging|risk_owner_assignment|complete\",\n    \"save_to_storage\": false,\n    \"force_reprocess\": false,\n    \"total_documents\": 1,\n    \"new_documents\": 1,\n    \"skipped_duplicate_documents\": 0,\n    \"processed_documents\": 1,\n    \"failed_documents\": 0,\n    \"progress_percent\": 100,\n    \"celery_task_id\": \"...\",\n    \"error\": null,\n    \"started_at\": \"...\",\n    \"completed_at\": \"...\",\n    \"created_at\": \"...\",\n    \"steps\": [\n      { \"stage\": \"extract_controls\", \"status\": \"completed\", \"document_id\": \"...\", \"filename\": \"policy.pdf\", \"error\": null, \"started_at\": \"...\", \"completed_at\": \"...\" }\n    ]\n  }\n}\n```\n\n## Errors\n401/403 (same as ingest) · 404 CLIENT_ORG_NOT_FOUND · 404 PIPELINE_RUN_NOT_FOUND (no runs yet for this org — POST /ingest first)"
           },
           "response": [],
           "event": [
@@ -520,30 +469,17 @@
           "name": "Pipeline status (specific run)",
           "request": {
             "auth": {
-              "type": "noauth"
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
             },
             "method": "GET",
             "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{externalToken}}",
-                "type": "text"
-              },
-              {
-                "key": "X-User-Id",
-                "value": "{{externalUserId}}",
-                "type": "text"
-              },
-              {
-                "key": "X-User-Email",
-                "value": "{{externalUserEmail}}",
-                "type": "text"
-              },
-              {
-                "key": "X-Org-Id",
-                "value": "{{clientOrgId}}",
-                "type": "text"
-              },
               {
                 "key": "Accept",
                 "value": "application/json",
@@ -596,7 +532,7 @@
           ]
         }
       ],
-      "description": "**Recommended path — replaces manual Steps 3-10.** One authenticated upload runs the entire workflow (control extraction → issues → classification → charts → risk discovery → scoring with auto-promotion → tagging with auto-apply → owner assignment with auto-apply) end-to-end via Celery/RabbitMQ/Redis.\n\n**Auth:** external-backend headers (`Authorization`, `X-User-Id`, `X-User-Email`, `X-Org-Id`) — auto-filled by **01 Auth → Login**. Requires `VERIFY_MOCK=true` in Docker `.env` for local testing.\n\n**Quick flow:** Login → Ingest (attach PDF) → Poll status until `completed` → 11 Fetch Latest Data.",
+      "description": "**Recommended path — replaces manual Steps 3-10.** One authenticated upload runs the entire workflow (control extraction → issues → classification → charts → risk discovery → scoring with auto-promotion → tagging with auto-apply → owner assignment with auto-apply) end-to-end via Celery/RabbitMQ/Redis.\n\n**Auth:** `Authorization: Bearer {{token}}` from **01 Auth → Login** (default `AUTH_MODE=self`). The token's org must match `{{clientOrgId}}` in the path.\n\n**Quick flow:** Login → Ingest (attach PDF) → Poll status until `completed` → 11 Fetch Latest Data.",
       "event": [
         {
           "listen": "prerequest",
@@ -606,11 +542,8 @@
               "if (!pm.collectionVariables.get('clientOrgId')) {",
               "  console.warn('Run 01 Auth → Login first — clientOrgId is empty.');",
               "}",
-              "if (!pm.collectionVariables.get('externalUserEmail')) {",
-              "  console.warn('Run 01 Auth → Login first — externalUserEmail is empty.');",
-              "}",
-              "if (!pm.collectionVariables.get('externalToken')) {",
-              "  pm.collectionVariables.set('externalToken', 'verify-mock-dev');",
+              "if (!pm.collectionVariables.get('token')) {",
+              "  console.warn('Run 01 Auth → Login first — token is empty.');",
               "}"
             ]
           }
@@ -3490,26 +3423,17 @@
     },
     {
       "key": "token",
-      "value": ""
+      "value": "",
+      "description": "JWT from POST /auth/login. Used for all protected routes including pipeline."
     },
     {
       "key": "clientOrgId",
       "value": ""
     },
     {
-      "key": "externalToken",
+      "key": "userId",
       "value": "",
-      "description": "Auto-set by Login. Used by ingest/status external auth. Any value works when VERIFY_MOCK=true."
-    },
-    {
-      "key": "externalUserId",
-      "value": "",
-      "description": "Auto-set from login user_id. X-User-Id header for ingest/status."
-    },
-    {
-      "key": "externalUserEmail",
-      "value": "",
-      "description": "Auto-set from login username. X-User-Email header for ingest/status."
+      "description": "Auto-set from login user_id (informational)."
     },
     {
       "key": "pipelineRunId",

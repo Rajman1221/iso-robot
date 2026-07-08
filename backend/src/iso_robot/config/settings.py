@@ -86,9 +86,9 @@ class Settings(BaseSettings):
     )
     jwt_algorithm: str = Field(default="HS256")
     jwt_idle_minutes: int = Field(
-        default=30,
-        description="Sliding window: token lifetime per request. Each authenticated "
-                    "request issues a fresh token, resetting this idle timeout.",
+        default=86_400,
+        description="Sliding window: token lifetime per request (default 60 days). "
+                    "Each authenticated request issues a fresh token, resetting this idle timeout.",
     )
 
     # ── Auth mode ─────────────────────────────────────────────────────────────

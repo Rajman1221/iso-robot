@@ -149,6 +149,19 @@ const reader = res.body.getReader();
 First seed the index after data exists: `POST /api/v1/chatbot/reindex`, then poll
 `GET /api/v1/jobs/{job_id}` until completed.
 
+## JWT auth (login & session)
+
+ISO Robot issues and validates its own JWT on every protected route (default
+`AUTH_MODE=self`). Login returns an `access_token`; send it as
+`Authorization: Bearer <token>` on subsequent calls.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `JWT_SECRET_KEY` | `dev-only-change-me` | HMAC secret for signing tokens — **override in production** |
+| `JWT_IDLE_MINUTES` | `86400` (60 days) | Sliding idle window per token; each authenticated response may return a fresh JWT in `X-Refresh-Token` |
+| `AUTH_MODE` | `self` | `self` = ISO Robot JWT everywhere; `external` = legacy pipeline verify against `VERIFY_API_URL` |
+| `AUTH_INTROSPECTION_KEYS` | _(empty)_ | Comma-separated keys for `POST /auth/verify` (`X-Api-Key` header) |
+
 ## External-backend auth (ingest & pipeline status)
 
 The `POST /api/v1/ingest/{clientOrgId}`, `GET /api/v1/pipeline/status/{clientOrgId}`, and

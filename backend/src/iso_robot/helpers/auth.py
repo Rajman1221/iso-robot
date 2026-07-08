@@ -24,8 +24,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tokens — real JWT (HS256). Sliding window: the token lifetime is jwt_idle_minutes,
-# and every authenticated request re-issues a fresh token (see deps.get_current_user).
+# Tokens — real JWT (HS256). Sliding window: default lifetime is jwt_idle_minutes
+# (60 days / 86400 minutes). Every authenticated request re-issues a fresh token
+# (see deps.get_current_user and SessionValidationMiddleware).
 # Same function signatures as before, so handlers/auth.py does NOT change.
 # ─────────────────────────────────────────────────────────────────────────────
 

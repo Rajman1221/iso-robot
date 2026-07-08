@@ -42,6 +42,17 @@ POST /auth/login
 }
 ```
 
+### Token lifetime
+
+Tokens are signed JWTs with a **60-day sliding idle window** (default
+`JWT_IDLE_MINUTES=86400`). Each authenticated request extends the session: the
+response includes an `X-Refresh-Token` header with a fresh JWT. Clients that
+make regular API calls can keep the same session alive for up to 60 days without
+re-logging in. Override the window via `JWT_IDLE_MINUTES` in the server `.env`.
+
+`POST /auth/verify` returns the current `expires_at` (Unix timestamp) for
+introspection.
+
 ### Errors
 
 | HTTP | code |

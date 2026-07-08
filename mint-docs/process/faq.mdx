@@ -80,7 +80,9 @@ icon: "circle-question"
   </Accordion>
   <Accordion title="How does authentication work?" icon="key">
     `POST /auth/login` returns a bearer token and the active `client_org_id`. Send
-    the token on the `Authorization` header for every protected call. See
+    the token on the `Authorization` header for every protected call. Tokens
+    default to a **60-day** sliding idle window (`JWT_IDLE_MINUTES=86400`); active
+    clients receive a renewed JWT in `X-Refresh-Token` on each request. See
     [Authentication](/api-reference/authentication).
   </Accordion>
   <Accordion title="How do I know when processing finished?" icon="gears">

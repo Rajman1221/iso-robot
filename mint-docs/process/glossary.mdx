@@ -93,7 +93,9 @@ first meet them in the pipeline.
   </Accordion>
   <Accordion title="Bearer token" icon="key">
     The secure pass returned at login. Sent on the `Authorization` header to prove
-    who you are on every protected request.
+    who you are on every protected request. Default lifetime is **60 days**
+    (`JWT_IDLE_MINUTES=86400`); each authenticated response can return a fresh
+    token in `X-Refresh-Token` (sliding window).
   </Accordion>
   <Accordion title="BM25" icon="magnifying-glass">
     A keyword-ranking algorithm used in discovery to score how well a library risk

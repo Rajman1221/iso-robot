@@ -5,9 +5,10 @@ icon: "key"
 ---
 
 <Note>
-**In plain English:** you sign in, and the system gives you a temporary pass (a
-token) plus the name of the organisation you're working on. That pass unlocks every
-later step and keeps each client's data separate.
+**In plain English:** you sign in, and the system gives you a bearer pass (valid
+for up to **60 days** with regular use) plus the name of the organisation you're
+working on. That pass unlocks every later step and keeps each client's data
+separate.
 </Note>
 
 <CardGroup cols={2}>
@@ -52,6 +53,14 @@ A user submits credentials. The service verifies them, issues a **signed JWT**
 (the bearer token), and returns the user's profile and **active organisation**.
 That `client_org_id` is the key that scopes documents, controls, issues, and
 risks for the rest of the run.
+
+### Token lifetime
+
+The JWT is valid for **60 days** by default (`JWT_IDLE_MINUTES=86400`). The window
+is **sliding**: every authenticated API call returns a fresh token in the
+`X-Refresh-Token` response header, so active clients stay signed in without
+calling `/auth/login` again. Idle sessions expire after 60 days with no requests.
+Check `expires_at` via `POST /auth/verify` when introspecting a token.
 
 ```mermaid
 sequenceDiagram

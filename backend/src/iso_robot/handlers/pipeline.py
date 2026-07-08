@@ -9,8 +9,9 @@
 - `POST /pipeline/cancel/{client_org_id}` — cancel the org's active run and
   release the one-active-run-per-org lock.
 
-Both are guarded by `verify_external_user` (external-backend auth), not
-ISO Robot's own JWT — see `handlers/pipeline_auth.py`.
+All are guarded by `authenticate_pipeline_request` — by default ISO Robot's own
+JWT (auth_mode="self"), or an external verify backend when auth_mode="external".
+See `handlers/pipeline_auth.py`.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from iso_robot.deps import (
     get_pipeline_step_repo,
 )
 from iso_robot.errors import APIError
-from iso_robot.handlers.pipeline_auth import verify_external_user
+from iso_robot.handlers.pipeline_auth import authenticate_pipeline_request
 from iso_robot.helpers.org_paths import org_base_dir
 from iso_robot.helpers.verify_cache import VerifiedContext
 from iso_robot.models.pipeline import PIPELINE_STAGES
@@ -139,7 +140,7 @@ async def _register_document(
 
 async def ingest(
     client_org_id: str,
-    verified: Annotated[VerifiedContext, Depends(verify_external_user)],
+    verified: Annotated[VerifiedContext, Depends(authenticate_pipeline_request)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     doc_repo: Annotated[DocumentRepository, Depends(get_document_repo)],
     registry_repo: Annotated[DocumentRegistryRepository, Depends(get_document_registry_repo)],
@@ -285,7 +286,7 @@ def _progress_percent(status: str, current_stage: str) -> int:
 
 async def pipeline_status(
     client_org_id: str,
-    verified: Annotated[VerifiedContext, Depends(verify_external_user)],
+    verified: Annotated[VerifiedContext, Depends(authenticate_pipeline_request)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     run_repo: Annotated[PipelineRunRepository, Depends(get_pipeline_run_repo)],
     step_repo: Annotated[PipelineStepRepository, Depends(get_pipeline_step_repo)],
@@ -353,7 +354,7 @@ async def pipeline_status(
 
 async def cancel_pipeline(
     client_org_id: str,
-    verified: Annotated[VerifiedContext, Depends(verify_external_user)],
+    verified: Annotated[VerifiedContext, Depends(authenticate_pipeline_request)],
     org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
     run_repo: Annotated[PipelineRunRepository, Depends(get_pipeline_run_repo)],
 ) -> ApiResponse:

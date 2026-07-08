@@ -101,6 +101,90 @@ Standard envelope: `{ "organisations": [OrgResponse] }`.
 
 ---
 
+## Organisation profile (create **or** upsert)
+
+```http
+POST /organisation-profile
+```
+
+**Auth:** Bearer + **admin role** (it can create organisations).
+
+One endpoint that creates an organisation together with its demography, or
+upserts either afterwards — no need to call `POST /orgs` and
+`POST /business-demography/update` separately.
+
+- **Omit `client_org_id`** → **create** a new org. `name` and `slug` are required
+  and the slug must be unique; folders + tenant mapping are provisioned, then the
+  demography row is written.
+- **Provide `client_org_id`** → **update** that org. Any org field you send
+  (`name`/`slug`/`industry`/`region`) is patched; the `business_demography` block
+  is upserted — **only the fields present in the request change**, everything else
+  is preserved.
+
+### Request — create
+
+```json
+{
+  "name": "Acme Corp",
+  "slug": "acme-corp",
+  "industry": "Manufacturing",
+  "region": "EU",
+  "business_demography": {
+    "sub_industry": "Automotive",
+    "employee_count": "5000",
+    "annual_revenue": "1B",
+    "headquarters_country": "Germany"
+  }
+}
+```
+
+### Request — upsert demography on an existing org
+
+```json
+{
+  "client_org_id": "uuid",
+  "business_demography": { "sub_industry": "Insurance" }
+}
+```
+
+### Response `200`
+
+```json
+{
+  "status": "success",
+  "message": "Organisation created",
+  "data": {
+    "created": true,
+    "organisation": {
+      "id": "uuid",
+      "name": "Acme Corp",
+      "slug": "acme-corp",
+      "industry": "Manufacturing",
+      "region": "EU",
+      "created_at": "…"
+    },
+    "demography": { "id": "uuid", "client_org_id": "uuid", "sub_industry": "Automotive", "…": "…" }
+  }
+}
+```
+
+`created` is `true` on a fresh org, `false` on an update.
+
+| HTTP | code | Meaning |
+| --- | --- | --- |
+| 403 | `FORBIDDEN` | Caller is not an admin |
+| 404 | `CLIENT_ORG_NOT_FOUND` | `client_org_id` was given but no such org |
+| 409 | `DUPLICATE_RECORD` | `slug` already taken |
+| 422 | `VALIDATION_ERROR` | Creating without `name` + `slug` |
+
+<Note>
+The older `POST /orgs` and `POST /business-demography/update` endpoints still
+exist and are unchanged; `/organisation-profile` is the one-call convenience that
+does both.
+</Note>
+
+---
+
 ## Update business demography
 
 ```http

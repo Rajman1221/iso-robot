@@ -37,13 +37,61 @@ from iso_robot.domain.repair_storage_paths import sync_org_folder_mapping
 from iso_robot.helpers.org_paths import resolve_file_in_folder
 from iso_robot.schemas.api import (
     ApiResponse,
+    BusinessDemographyPayload,
     ControlDocumentResponse,
     DemographyResponse,
     DemographyUpdateRequest,
+    OrganisationProfileData,
+    OrganisationProfileRequest,
     OrgCreateRequest,
     OrgResponse,
     RiskUploadRequest,
 )
+
+
+def _demography_upsert_kwargs(bd: BusinessDemographyPayload) -> dict[str, Any]:
+    """Map a BusinessDemographyPayload to DemographyRepository.upsert kwargs.
+
+    A field left as ``None`` means "don't touch"; the repository preserves the
+    existing stored value. Nested list items are dumped to plain dicts.
+    """
+    functions = bd.functions
+    if functions is None and bd.function_catalog:
+        functions = [item.function for item in bd.function_catalog]
+
+    hq = bd.headquarters or ""
+    return dict(
+        industry=bd.industry,
+        sub_industry=bd.sub_industry,
+        employee_count=str(bd.employee_count) if bd.employee_count else None,
+        annual_revenue=bd.annual_revenue,
+        headquarters_country=bd.headquarters_country or hq.split(",")[0].strip() or None,
+        headquarters_city=bd.headquarters_city
+        or (hq.split(",")[1].strip() if "," in hq else None),
+        ownership_type=bd.ownership_type,
+        regulatory_region=bd.regulatory_region,
+        website=bd.website,
+        functions=functions,
+        function_catalog=(
+            [item.model_dump() for item in bd.function_catalog]
+            if bd.function_catalog is not None
+            else None
+        ),
+        employee_hierarchy=(
+            [item.model_dump() for item in bd.employee_hierarchy]
+            if bd.employee_hierarchy is not None
+            else None
+        ),
+        risk_assignment_rules=(
+            [item.model_dump() for item in bd.risk_assignment_rules]
+            if bd.risk_assignment_rules is not None
+            else None
+        ),
+        locations=bd.locations,
+        processes=bd.processes,
+        regulatory_frameworks=bd.regulatory_frameworks,
+        notes=bd.notes,
+    )
 
 
 # ── API: Create Organisation ──────────────────────────────────────────────────
@@ -111,46 +159,9 @@ async def update_demography(
     if not org:
         raise APIError("Organisation not found", code="CLIENT_ORG_NOT_FOUND", status_code=404)
 
-    bd = body.business_demography
-    functions = bd.functions
-    if functions is None and bd.function_catalog:
-        functions = [item.function for item in bd.function_catalog]
-
-    function_catalog = (
-        [item.model_dump() for item in bd.function_catalog]
-        if bd.function_catalog is not None
-        else None
-    )
-    employee_hierarchy = (
-        [item.model_dump() for item in bd.employee_hierarchy]
-        if bd.employee_hierarchy is not None
-        else None
-    )
-    risk_assignment_rules = (
-        [item.model_dump() for item in bd.risk_assignment_rules]
-        if bd.risk_assignment_rules is not None
-        else None
-    )
-
     demo = await demo_repo.upsert(
         client_org_id=body.client_org_id,
-        industry=bd.industry,
-        sub_industry=bd.sub_industry,
-        employee_count=str(bd.employee_count) if bd.employee_count else None,
-        annual_revenue=bd.annual_revenue,
-        headquarters_country=bd.headquarters_country or (bd.headquarters or "").split(",")[0].strip() or None,
-        headquarters_city=bd.headquarters_city or ((bd.headquarters or "").split(",")[1].strip() if "," in (bd.headquarters or "") else None),
-        ownership_type=bd.ownership_type,
-        regulatory_region=bd.regulatory_region,
-        website=bd.website,
-        functions=functions,
-        function_catalog=function_catalog,
-        employee_hierarchy=employee_hierarchy,
-        risk_assignment_rules=risk_assignment_rules,
-        locations=bd.locations,
-        processes=bd.processes,
-        regulatory_frameworks=bd.regulatory_frameworks,
-        notes=bd.notes,
+        **_demography_upsert_kwargs(body.business_demography),
     )
 
     await audit_repo.log(
@@ -187,6 +198,103 @@ async def get_demography(
         status="success",
         message="Demography retrieved",
         data=DemographyResponse(**demo).model_dump(),
+    )
+
+
+# ── Unified: Create OR upsert an organisation + its demography in one call ─────
+
+async def upsert_organisation_profile(
+    body: OrganisationProfileRequest,
+    org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
+    folder_repo: Annotated[FolderRepository, Depends(get_folder_repo)],
+    tenant_repo: Annotated[TenantRepository, Depends(get_tenant_repo)],
+    demo_repo: Annotated[DemographyRepository, Depends(get_demography_repo)],
+    audit_repo: Annotated[AuditLogRepository, Depends(get_audit_repo)],
+    indexing: Annotated[IndexingService, Depends(get_indexing_service)],
+    settings: Annotated[Settings, Depends(get_app_settings)],
+    _admin: Annotated[dict, Depends(require_admin)],
+) -> ApiResponse:
+    """Create an organisation together with its demography, or upsert either.
+
+    - No ``client_org_id`` → CREATE: requires ``name`` + a unique ``slug``, then
+      provisions folders + tenant mapping and writes the demography.
+    - With ``client_org_id`` → UPDATE: patches any org field you send and upserts
+      the demography (only the fields present in the request change).
+    """
+    created = False
+
+    if body.client_org_id:
+        org = await org_repo.get_by_id(body.client_org_id)
+        if not org:
+            raise APIError("Organisation not found", code="CLIENT_ORG_NOT_FOUND", status_code=404)
+
+        if body.slug and body.slug != org["slug"]:
+            clash = await org_repo.get_by_slug(body.slug)
+            if clash and clash["id"] != org["id"]:
+                raise APIError("Slug already taken", code="DUPLICATE_RECORD", status_code=409)
+
+        if any(v is not None for v in (body.name, body.slug, body.industry, body.region)):
+            org = await org_repo.update(
+                org["id"],
+                name=body.name,
+                slug=body.slug,
+                industry=body.industry,
+                region=body.region,
+            )
+    else:
+        if not body.name or not body.slug:
+            raise APIError(
+                "name and slug are required to create an organisation",
+                code="VALIDATION_ERROR",
+                status_code=422,
+            )
+        if await org_repo.get_by_slug(body.slug):
+            raise APIError("Slug already taken", code="DUPLICATE_RECORD", status_code=409)
+        org = await org_repo.create(
+            name=body.name,
+            slug=body.slug,
+            industry=body.industry,
+            region=body.region,
+        )
+        created = True
+
+    org_id = org["id"]
+
+    # Provision folders (idempotent) and — on create — the tenant mapping.
+    await sync_org_folder_mapping(
+        settings,
+        folder_repo,
+        client_org_id=org_id,
+        org_slug=str(org["slug"]),
+    )
+    if created:
+        await tenant_repo.create(client_org_id=org_id, tenant_id=body.tenant_id or org["slug"])
+
+    demo = await demo_repo.upsert(
+        client_org_id=org_id,
+        **_demography_upsert_kwargs(body.business_demography),
+    )
+
+    await audit_repo.log(
+        api_name="organisation_profile_upsert",
+        client_org_id=org_id,
+        tenant_id=body.tenant_id,
+        requested_by=body.updated_by,
+        status="success",
+        output_metadata={"created": created, "demography_id": demo["id"]},
+    )
+
+    # Refresh the org profile chunk in the vector index (best-effort, never fatal).
+    await indexing.index_org_profile(org_id, org=org, demography=demo)
+
+    return ApiResponse(
+        status="success",
+        message="Organisation created" if created else "Organisation profile updated",
+        data=OrganisationProfileData(
+            created=created,
+            organisation=OrgResponse(**org),
+            demography=DemographyResponse(**demo),
+        ).model_dump(),
     )
 
 

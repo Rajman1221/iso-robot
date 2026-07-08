@@ -91,7 +91,32 @@ class Settings(BaseSettings):
                     "request issues a fresh token, resetting this idle timeout.",
     )
 
+    # ── Auth mode ─────────────────────────────────────────────────────────────
+    # "self"     → ISO Robot IS the identity provider. It issues the token
+    #              (POST /auth/login) and validates its OWN JWT on every route,
+    #              including the pipeline APIs. Client backends integrate with
+    #              just two calls: get a token, and (optionally) introspect it via
+    #              POST /auth/verify. This is the default.
+    # "external" → Legacy: the pipeline APIs forward the caller's token to an
+    #              external backend (verify_api_url) instead of trusting our JWT.
+    auth_mode: str = Field(
+        default="self",
+        description="'self' (ISO Robot issues & validates the token) or 'external' "
+                    "(pipeline APIs verify the caller's token against verify_api_url).",
+    )
+    auth_introspection_keys: str = Field(
+        default="",
+        description="Comma-separated list of shared keys a caller must send as "
+                    "X-Api-Key to use POST /auth/verify (token introspection). Give "
+                    "each client backend one key. Empty = no key required (dev only).",
+    )
+
+    def introspection_keys(self) -> set[str]:
+        """Parsed, non-empty set of allowed introspection X-Api-Key values."""
+        return {k.strip() for k in self.auth_introspection_keys.split(",") if k.strip()}
+
     # ── External backend verification (ingest / pipeline-status auth) ──────────
+    # Only used when auth_mode == "external".
     verify_api_url: str = Field(
         default="",
         description="Existing backend endpoint ISO Robot calls to verify a user's "

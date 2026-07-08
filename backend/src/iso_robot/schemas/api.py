@@ -225,6 +225,27 @@ class LoginData(BaseModel):
     roles: List[str] = Field(default_factory=list)
 
 
+class VerifyTokenRequest(BaseModel):
+    """Token introspection request. A client backend sends a token it received
+    from us and gets back whether it is still valid plus the bound identity."""
+
+    token: str = Field(..., description="The access token to introspect.")
+
+
+class VerifyTokenData(BaseModel):
+    """Introspection result. `valid` is always present; identity fields are set
+    only when the token is valid and the user is still active."""
+
+    valid: bool
+    user_id: Optional[str] = None
+    email: Optional[str] = None
+    client_org_id: Optional[str] = None
+    role: Optional[str] = None
+    expires_at: Optional[int] = Field(
+        default=None, description="Token expiry as a Unix timestamp (seconds)."
+    )
+
+
 # ── Organisation ──────────────────────────────────────────────────────────────
 
 class OrgCreateRequest(BaseModel):
@@ -357,6 +378,28 @@ class DemographyUpdateRequest(BaseModel):
     business_demography: BusinessDemographyPayload = Field(default_factory=BusinessDemographyPayload)
 
 
+class OrganisationProfileRequest(BaseModel):
+    """One call that creates an organisation + its demography, or upserts either.
+
+    - Omit ``client_org_id`` to CREATE a new organisation. ``name`` and ``slug``
+      are then required and the slug must be unique.
+    - Provide ``client_org_id`` to UPDATE an existing organisation. Any org field
+      (``name``/``slug``/``industry``/``region``) that is set is updated; the
+      ``business_demography`` block is upserted (only the fields you send change).
+    """
+
+    client_org_id: Optional[str] = Field(
+        default=None, description="Existing org id to update; omit to create a new org."
+    )
+    name: Optional[str] = Field(default=None, description="Required when creating.")
+    slug: Optional[str] = Field(default=None, description="Required when creating; must be unique.")
+    industry: Optional[str] = None
+    region: Optional[str] = None
+    tenant_id: Optional[str] = None
+    updated_by: Optional[str] = None
+    business_demography: BusinessDemographyPayload = Field(default_factory=BusinessDemographyPayload)
+
+
 class DemographyResponse(BaseModel):
     id: str
     client_org_id: str
@@ -379,6 +422,14 @@ class DemographyResponse(BaseModel):
     notes: Optional[str] = None
     created_at: str
     updated_at: str
+
+
+class OrganisationProfileData(BaseModel):
+    """Response for the unified create/upsert organisation-profile endpoint."""
+
+    created: bool = Field(description="True if a new organisation was created, False if updated.")
+    organisation: OrgResponse
+    demography: DemographyResponse
 
 
 # ── Control Document Upload ───────────────────────────────────────────────────

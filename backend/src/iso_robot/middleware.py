@@ -26,7 +26,12 @@ PUBLIC_PREFIXES = ("/docs", "/redoc", "/openapi.json")
 # The pipeline APIs run their own auth in the `authenticate_pipeline_request`
 # dependency (self-mode: our JWT; external-mode: the external verify backend),
 # so this middleware's session checkpoint skips them either way.
-EXTERNAL_AUTH_PREFIXES = ("/api/v1/ingest", "/api/v1/pipeline/status", "/api/v1/pipeline/cancel")
+EXTERNAL_AUTH_PREFIXES = (
+    "/api/v1/ingest",
+    "/api/v1/pipeline/status",
+    "/api/v1/pipeline/runs",
+    "/api/v1/pipeline/cancel",
+)
 
 
 def _is_public(path: str) -> bool:

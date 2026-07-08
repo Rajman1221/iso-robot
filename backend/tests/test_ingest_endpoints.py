@@ -374,3 +374,154 @@ async def test_cancel_pipeline_no_active_run_404(client: TestClient, db_session)
     resp = client.post(f"/api/v1/pipeline/cancel/{org['id']}", headers=_headers(org["id"]))
     assert resp.status_code == 404
     assert resp.json()["code"] == "NO_ACTIVE_PIPELINE_RUN"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_runs_unknown_org_404(client: TestClient) -> None:
+    org_id = unique_id("missing-runs-org")
+    resp = client.get(f"/api/v1/pipeline/runs/{org_id}", headers=_headers(org_id))
+    assert resp.status_code == 404
+    assert resp.json()["code"] == "CLIENT_ORG_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_runs_empty_org_returns_empty_list(client: TestClient, db_session) -> None:
+    org = await _create_org(db_session)
+    resp = client.get(f"/api/v1/pipeline/runs/{org['id']}", headers=_headers(org["id"]))
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["client_org_id"] == org["id"]
+    assert data["summary"]["total_runs"] == 0
+    assert data["summary"]["active_now"] == 0
+    assert data["runs"] == []
+    assert data["pagination"] == {"limit": 20, "offset": 0, "total": 0, "has_more": False}
+
+
+@pytest.mark.asyncio
+async def test_pipeline_runs_lists_runs_with_summary_and_documents(client: TestClient, db_session) -> None:
+    from iso_robot.repositories.pipeline_repository import PipelineRunRepository, PipelineStepRepository
+
+    org = await _create_org(db_session)
+    ingest_resp = client.post(
+        f"/api/v1/ingest/{org['id']}",
+        headers=_headers(org["id"]),
+        files={"file": ("policy.pdf", io.BytesIO(_pdf_bytes("runs-1")), "application/pdf")},
+        data={"save_to_storage": "false"},
+    )
+    assert ingest_resp.status_code == 202
+    ingest_data = ingest_resp.json()["data"]
+    run_id = ingest_data["pipeline_run_id"]
+    doc = ingest_data["documents"][0]
+
+    run_repo = PipelineRunRepository(db_session)
+    step_repo = PipelineStepRepository(db_session)
+    await step_repo.create(
+        pipeline_run_id=run_id,
+        stage="ingest_register",
+        status="completed",
+        result={
+            "documents": [
+                {
+                    "document_id": doc["document_id"],
+                    "document_registry_id": doc["document_registry_id"],
+                    "filename": doc["filename"],
+                }
+            ],
+            "registered": True,
+        },
+    )
+    await run_repo.mark_completed(run_id)
+    await run_repo.set_stage(run_id, "complete", status="completed")
+
+    second = await run_repo.create(
+        client_org_id=org["id"], save_to_storage=False, force_reprocess=False, status="waiting"
+    )
+    await step_repo.create(
+        pipeline_run_id=second["id"],
+        stage="ingest_register",
+        status="pending",
+        result={
+            "documents": [
+                {
+                    "document_id": "doc-2",
+                    "document_registry_id": "reg-2",
+                    "filename": "queued.pdf",
+                }
+            ],
+            "registered": True,
+        },
+    )
+
+    resp = client.get(f"/api/v1/pipeline/runs/{org['id']}", headers=_headers(org["id"]))
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["summary"]["total_runs"] == 2
+    assert data["summary"]["completed"] == 1
+    assert data["summary"]["waiting"] == 1
+    assert data["summary"]["active_now"] == 1
+    assert data["pagination"]["total"] == 2
+    assert len(data["runs"]) == 2
+
+    waiting_run = next(run for run in data["runs"] if run["status"] == "waiting")
+    completed_run = next(run for run in data["runs"] if run["status"] == "completed")
+
+    assert waiting_run["pipeline_run_id"] == second["id"]
+    assert waiting_run["queue_position"] == 1
+    assert waiting_run["documents"] == [
+        {
+            "document_id": "doc-2",
+            "document_registry_id": "reg-2",
+            "filename": "queued.pdf",
+        }
+    ]
+    assert waiting_run["status_url"].endswith(f"pipeline_run_id={second['id']}")
+
+    assert completed_run["pipeline_run_id"] == run_id
+    assert completed_run["progress_percent"] == 100
+    assert completed_run["documents"] == [
+        {
+            "document_id": doc["document_id"],
+            "document_registry_id": doc["document_registry_id"],
+            "filename": doc["filename"],
+        }
+    ]
+    assert completed_run["queue_position"] is None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_runs_status_filter_and_pagination(client: TestClient, db_session) -> None:
+    from iso_robot.repositories.pipeline_repository import PipelineRunRepository
+
+    org = await _create_org(db_session)
+    run_repo = PipelineRunRepository(db_session)
+    for idx in range(3):
+        run = await run_repo.create(
+            client_org_id=org["id"], save_to_storage=False, force_reprocess=False, status="waiting"
+        )
+        if idx == 0:
+            await run_repo.mark_completed(run["id"])
+
+    resp = client.get(
+        f"/api/v1/pipeline/runs/{org['id']}",
+        headers=_headers(org["id"]),
+        params={"status": "waiting", "limit": 1, "offset": 0},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["pagination"] == {"limit": 1, "offset": 0, "total": 2, "has_more": True}
+    assert len(data["runs"]) == 1
+    assert data["runs"][0]["status"] == "waiting"
+    assert data["summary"]["total_runs"] == 3
+    assert data["summary"]["waiting"] == 2
+
+
+@pytest.mark.asyncio
+async def test_pipeline_runs_invalid_status_filter_400(client: TestClient, db_session) -> None:
+    org = await _create_org(db_session)
+    resp = client.get(
+        f"/api/v1/pipeline/runs/{org['id']}",
+        headers=_headers(org["id"]),
+        params={"status": "not-a-status"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "INVALID_PIPELINE_STATUS"

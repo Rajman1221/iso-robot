@@ -755,3 +755,54 @@ class PipelineCancelData(BaseModel):
     pipeline_run_id: str
     status: str
     error: str
+
+
+class PipelineRunDocumentSummary(BaseModel):
+    document_id: Optional[str] = None
+    document_registry_id: Optional[str] = None
+    filename: Optional[str] = None
+
+
+class PipelineRunListItem(BaseModel):
+    pipeline_run_id: str
+    status: str
+    current_stage: str
+    progress_percent: int
+    total_documents: int
+    new_documents: int
+    skipped_duplicate_documents: int
+    processed_documents: int
+    failed_documents: int
+    documents: List[PipelineRunDocumentSummary] = Field(default_factory=list)
+    celery_task_id: Optional[str] = None
+    queue_position: Optional[int] = None
+    error: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: str
+    duration_seconds: Optional[int] = None
+    status_url: str
+
+
+class PipelineRunsSummary(BaseModel):
+    total_runs: int
+    running: int = 0
+    queued: int = 0
+    waiting: int = 0
+    completed: int = 0
+    failed: int = 0
+    active_now: int = 0
+
+
+class PipelinePagination(BaseModel):
+    limit: int
+    offset: int
+    total: int
+    has_more: bool
+
+
+class PipelineRunsListData(BaseModel):
+    client_org_id: str
+    summary: PipelineRunsSummary
+    pagination: PipelinePagination
+    runs: List[PipelineRunListItem] = Field(default_factory=list)

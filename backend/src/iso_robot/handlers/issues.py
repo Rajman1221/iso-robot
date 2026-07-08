@@ -8,6 +8,7 @@ from fastapi import BackgroundTasks, Depends, File, Query, UploadFile, Body
 
 from iso_robot.config import Settings
 from iso_robot.deps import get_app_settings, get_db, get_job_repo, get_org_repo
+from iso_robot.domain.job_dispatch import dispatch_legacy_job
 from iso_robot.domain.job_runner import execute_job
 from iso_robot.domain.job_service import create_job
 from iso_robot.domain.issues_import import import_issues_from_csv
@@ -136,7 +137,7 @@ async def issues_from_controls(
         "region_hint": body.region_hint,
     }
     row = await create_job(jobs, job_type="issues_from_controls", payload=payload)
-    background_tasks.add_task(execute_job, row["id"], "issues_from_controls", payload)
+    dispatch_legacy_job(row["id"], "issues_from_controls", payload, background_tasks=background_tasks)
     return JobResponse(**row)
 
 
@@ -149,7 +150,7 @@ async def classify_issues(
     if body.issue_ids is not None:
         payload["issue_ids"] = body.issue_ids
     row = await create_job(jobs, job_type="classify_issues", payload=payload)
-    background_tasks.add_task(execute_job, row["id"], "classify_issues", payload)
+    dispatch_legacy_job(row["id"], "classify_issues", payload, background_tasks=background_tasks)
     return JobResponse(**row)
 
 

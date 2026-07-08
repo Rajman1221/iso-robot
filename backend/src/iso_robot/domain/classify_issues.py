@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from iso_robot.config import Settings
 from iso_robot.domain.heuristics import heuristic_classify_issue
 from iso_robot.domain.indexing_service import build_indexing_service
 from iso_robot.domain.llm_service import chat_json_object
+from iso_robot.helpers.concurrency import gather_bounded
 from iso_robot.repositories.issue_repository import IssueClassificationRepository, IssueRepository
 
 logger = logging.getLogger(__name__)
@@ -209,17 +210,12 @@ def _normalize(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-async def classify_issue(
-    settings: Settings,
-    conn: AsyncSession,
-    issue_id: str,
-) -> Optional[Dict[str, Any]]:
-    issues = IssueRepository(conn)
-    cls_repo = IssueClassificationRepository(conn)
-    row = await issues.get_by_id(issue_id)
-    if row is None:
-        return None
-
+async def _classify_row_llm(
+    settings: Settings, row: Dict[str, Any]
+) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Classify one issue via LLM (heuristic fallback). Pure compute — no DB
+    session — so it is safe to run many of these concurrently. Returns
+    ``(normalized_classification, model_version)``."""
     user = (
         f"Classify this enterprise risk monitoring issue:\n"
         f"title: {row.get('title') or ''}\n"
@@ -228,37 +224,45 @@ async def classify_issue(
         "Respond with JSON only."
     )
     model_version = settings.azure_openai_deployment or None
-
     try:
-        data = await chat_json_object(settings, system=_system(), user=user)
-        norm = _normalize(data)
+        data = await chat_json_object(settings, system=_system(), user=user, stage="classify_issues")
+        return _normalize(data), model_version
     except Exception as exc:
         if not settings.use_llm_fallback:
             raise
-        logger.warning("LLM classification failed for %s: %s; using heuristics.", issue_id, exc)
-        norm = heuristic_classify_issue(
-            row.get("title"),
-            row.get("body"),
-            row.get("region_hint"),
-        )
+        logger.warning("LLM classification failed for %s: %s; using heuristics.", row.get("id"), exc)
+        norm = heuristic_classify_issue(row.get("title"), row.get("body"), row.get("region_hint"))
         norm.pop("_source", None)
-        model_version = "heuristic-fallback"
+        return norm, "heuristic-fallback"
 
+
+async def _persist_classification(
+    conn: AsyncSession, issue_id: str, norm: Dict[str, Any], model_version: Optional[str]
+) -> None:
+    """Replace an issue's classification (delete-then-insert = idempotent on retry)."""
+    cls_repo = IssueClassificationRepository(conn)
     await cls_repo.delete_for_issue(issue_id)
     await cls_repo.insert(
-        row_id=str(uuid.uuid4()),
-        issue_id=issue_id,
-        classification=norm,
-        model_version=model_version,
+        row_id=str(uuid.uuid4()), issue_id=issue_id, classification=norm, model_version=model_version
     )
 
-    # Index the issue with its fresh classification (best-effort, never fatal).
+
+async def classify_issue(
+    settings: Settings,
+    conn: AsyncSession,
+    issue_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Classify + persist + index a single issue (direct/back-compat entry point)."""
+    row = await IssueRepository(conn).get_by_id(issue_id)
+    if row is None:
+        return None
+    norm, model_version = await _classify_row_llm(settings, row)
+    await _persist_classification(conn, issue_id, norm, model_version)
     client_org_id = row.get("client_org_id")
     if client_org_id:
         await build_indexing_service(settings, conn).index_issue(
             str(client_org_id), row, classification=norm
         )
-
     return norm
 
 
@@ -269,26 +273,58 @@ async def classify_issues_job(
     *,
     reclassify: bool = False,
 ) -> int:
+    """Classify a set of issues with bounded LLM concurrency.
+
+    LLM calls run concurrently (they hold no session); persistence and bulk
+    indexing then run sequentially on the shared session.
+    """
     issues = IssueRepository(conn)
     if issue_ids:
         candidates = [i for i in issue_ids if i]
         todo = candidates if reclassify else await issues.filter_ids_missing_classification(candidates)
     else:
         todo = await issues.list_ids_missing_classification()
+    if not todo:
+        return 0
+
+    rows = await issues.list_by_ids(todo)
+
+    results = await gather_bounded(
+        [(lambda r=r: _classify_row_llm(settings, r)) for r in rows],
+        limit=settings.classify_llm_concurrency,
+        label="classify_issues",
+    )
 
     done = 0
+    index_items: List[Dict[str, Any]] = []
     affected_orgs: set[str] = set()
-    for iid in todo:
-        result = await classify_issue(settings, conn, iid)
-        if result is not None:
-            done += 1
-            issue = await issues.get_by_id(iid)
-            if issue and issue.get("client_org_id"):
-                affected_orgs.add(str(issue["client_org_id"]))
+    for row, result in zip(rows, results):
+        if isinstance(result, BaseException):
+            logger.warning("classification failed for %s: %s", row.get("id"), result)
+            continue
+        norm, model_version = result
+        await _persist_classification(conn, str(row["id"]), norm, model_version)
+        done += 1
+        index_items.append({"issue": row, "classification": norm})
+        if row.get("client_org_id"):
+            affected_orgs.add(str(row["client_org_id"]))
 
-    # Rebuild the org-level PESTEL/SWOT/TVRA aggregate once per affected org.
-    if affected_orgs:
-        indexing = build_indexing_service(settings, conn)
-        for org_id in affected_orgs:
-            await indexing.reindex_aggregate(org_id)
+    # One bulk index per org for the whole batch, then rebuild each aggregate once.
+    indexing = build_indexing_service(settings, conn)
+    await _bulk_index_issues_per_org(indexing, index_items)
+    for org_id in affected_orgs:
+        await indexing.reindex_aggregate(org_id)
     return done
+
+
+async def _bulk_index_issues_per_org(indexing, index_items: List[Dict[str, Any]]) -> int:
+    """Bulk-index issues grouped by org (each bulk index call is pinned to one org)."""
+    by_org: Dict[str, List[Dict[str, Any]]] = {}
+    for item in index_items:
+        org = str(item["issue"].get("client_org_id") or "")
+        if org:
+            by_org.setdefault(org, []).append(item)
+    total = 0
+    for org, items in by_org.items():
+        total += await indexing.index_issues_bulk(org, items)
+    return total

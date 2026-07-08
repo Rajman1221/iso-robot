@@ -77,3 +77,46 @@ groups:
         annotations:
           summary: "High Celery task failure rate for {{ $labels.task }}"
           description: "Task {{ $labels.task }} failed more than 3 times in 15 minutes."
+
+  - name: iso_robot_llm_pipeline
+    rules:
+      - alert: LLMErrorRateHigh
+        expr: |
+          (
+            sum(rate(llm_requests_total{status!="ok"}[10m]))
+            /
+            sum(rate(llm_requests_total[10m]))
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High LLM error rate"
+          description: "More than 20% of Azure OpenAI chat completion requests are failing over the last 10 minutes."
+
+      - alert: LLMLatencyP95High
+        expr: histogram_quantile(0.95, sum by (le) (rate(llm_request_duration_seconds_bucket[10m]))) > 120
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High LLM p95 latency"
+          description: "LLM chat completion p95 latency is above 120s for more than 10 minutes."
+
+      - alert: PipelineStageStalled
+        expr: sum(pipeline_active_runs) > 0 and sum(rate(pipeline_items_processed_total[15m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pipeline stage stalled"
+          description: "Pipeline runs are active but no items have been processed in the last 15 minutes."
+
+      - alert: PipelineBatchesDeadLettered
+        expr: increase(pipeline_batches_total{status="dead_lettered"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pipeline batches dead-lettered on {{ $labels.stage }}"
+          description: "One or more pipeline batches were dead-lettered on stage {{ $labels.stage }} in the last 15 minutes."

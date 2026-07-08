@@ -435,6 +435,7 @@ async def aggregate_classifications(
     industry: Optional[str] = None,
     region: Optional[str] = None,
     issue_id: Optional[str] = None,
+    client_org_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     issues_repo = IssueRepository(conn)
     cls_repo = IssueClassificationRepository(conn)
@@ -455,7 +456,9 @@ async def aggregate_classifications(
             has_cls = bool(cls_map.get(iid, {}).get("classification"))
             focused_issue = {"id": iid, "title": one.get("title"), "has_classification": has_cls}
     else:
-        raw_issues = await issues_repo.list_all(limit=2000, offset=0)
+        # client_org_id scopes the roll-up to one tenant (pipeline path); the public
+        # GET /classifications endpoint passes None and keeps its global view.
+        raw_issues = await issues_repo.list_all(limit=2000, offset=0, client_org_id=client_org_id)
         issue_ids = [str(r["id"]) for r in raw_issues]
         cls_map = await cls_repo.map_for_issues(issue_ids) if issue_ids else {}
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Optional
 
@@ -46,7 +45,10 @@ async def execute_job(job_id: str, job_type: str, payload: dict[str, Any]) -> No
                 await score_risks_job(settings, conn, ids, ctrls, client_org_id=org_id)
 
             elif job_type in ("risk_discovery", "discover_risks"):
-                await run_risk_discovery(settings, conn)
+                client_org_id = payload.get("client_org_id")
+                if not client_org_id:
+                    raise ValueError("client_org_id required for risk discovery")
+                await run_risk_discovery(settings, conn, str(client_org_id))
 
             elif job_type == "risk_tagging":
                 await run_risk_tagging_job(settings, conn, payload, job_id=job_id)
@@ -79,9 +81,12 @@ async def execute_job(job_id: str, job_type: str, payload: dict[str, Any]) -> No
                         job_type="classify_issues",
                         payload=classify_payload,
                     )
-                    asyncio.ensure_future(
-                        execute_job(classify_row["id"], "classify_issues", classify_payload)
-                    )
+                    # Hand the follow-up classification to a worker (or in-process
+                    # if legacy_jobs_via_celery is off) instead of leaking a
+                    # fire-and-forget task into the API event loop.
+                    from iso_robot.domain.job_dispatch import dispatch_legacy_job
+
+                    dispatch_legacy_job(classify_row["id"], "classify_issues", classify_payload)
                 return  # status already set above
 
             else:

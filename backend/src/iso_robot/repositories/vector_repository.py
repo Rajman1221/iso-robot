@@ -198,6 +198,32 @@ class VectorRepository:
         )
         return await self._delete(expr)
 
+    async def delete_by_entity_ids(
+        self, *, client_org_id: str, entity_type: str, entity_ids: Sequence[str]
+    ) -> bool:
+        """Remove chunks for a specific set of entities in one org (chunked ``in`` deletes).
+
+        Replaces N single-entity deletes with a handful of batched expressions,
+        so incremental re-indexing of a batch is a couple of round-trips, not one
+        per row.
+        """
+        if self._client is None:
+            return False
+        ids = [str(e) for e in entity_ids if e]
+        if not ids:
+            return True
+        ok = True
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            joined = ", ".join(_quote(e) for e in chunk)
+            expr = (
+                f"client_org_id == {_quote(client_org_id)} "
+                f"and entity_type == {_quote(entity_type)} "
+                f"and entity_id in [{joined}]"
+            )
+            ok = await self._delete(expr) and ok
+        return ok
+
     async def _delete(self, expr: str) -> bool:
         await self.ensure_collection()
         try:

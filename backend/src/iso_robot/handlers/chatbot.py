@@ -28,6 +28,7 @@ from iso_robot.deps import (
 from iso_robot.domain.chat_service import stream_answer
 from iso_robot.domain.embedding_service import is_embedding_configured
 from iso_robot.domain.indexing_service import IndexingService
+from iso_robot.domain.job_dispatch import dispatch_legacy_job
 from iso_robot.domain.job_runner import execute_job
 from iso_robot.domain.job_service import create_job
 from iso_robot.domain.retrieval_service import RetrievalService
@@ -147,7 +148,7 @@ async def reindex(
         "requested_by": current_user.get("id"),
     }
     row = await create_job(jobs, job_type="reindex_org", payload=payload)
-    background_tasks.add_task(execute_job, row["id"], "reindex_org", payload)
+    dispatch_legacy_job(row["id"], "reindex_org", payload, background_tasks=background_tasks)
 
     await audit_repo.log(
         api_name="chatbot_reindex",

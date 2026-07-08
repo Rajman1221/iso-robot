@@ -67,6 +67,27 @@ class RiskAssessmentRepository:
         d["assessment"] = d.pop("assessment_json", None) or {}
         return d
 
+    async def map_latest_for_issues(self, issue_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Return ``{issue_id: latest assessment dict}`` for the given issues in
+        one query (newest-wins), so the scoring join doesn't do N round-trips."""
+        if not issue_ids:
+            return {}
+        stmt = (
+            select(RiskAssessment)
+            .where(RiskAssessment.issue_id.in_(issue_ids))
+            .order_by(RiskAssessment.issue_id, RiskAssessment.created_at.desc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        out: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            iid = str(r.issue_id)
+            if iid in out:
+                continue
+            d = to_dict(r)
+            d["assessment"] = d.pop("assessment_json", None) or {}
+            out[iid] = d
+        return out
+
     async def list_all(self, limit: int = 2000, offset: int = 0) -> List[Dict[str, Any]]:
         stmt = select(RiskAssessment).order_by(RiskAssessment.created_at.desc()).limit(limit).offset(offset)
         rows = (await self._session.execute(stmt)).scalars().all()

@@ -59,7 +59,14 @@ def _list_steps(run_id: str) -> list[dict]:
 @pytest.fixture(autouse=True)
 def _stub_domain_functions(monkeypatch: pytest.MonkeyPatch):
     """Replace every AI/domain call the stage tasks make with a deterministic
-    async stand-in, so the canvas exercises only orchestration + bookkeeping."""
+    async stand-in, so the canvas exercises only orchestration + bookkeeping.
+
+    This file validates the LEGACY v1 chain (per-document steps), so it pins
+    pipeline_v2_enabled=False; the batched v2 machine is covered separately by
+    test_pipeline_v2_eager.py."""
+    from iso_robot.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "pipeline_v2_enabled", False)
 
     async def fake_extract_controls_job(settings, session, payload) -> None:
         return None
@@ -70,10 +77,10 @@ def _stub_domain_functions(monkeypatch: pytest.MonkeyPatch):
     async def fake_classify_issues_job(settings, session, issue_ids) -> int:
         return 0
 
-    async def fake_aggregate_classifications(session) -> dict:
+    async def fake_aggregate_classifications(session, *, client_org_id=None) -> dict:
         return {"pestel": {}, "swot": {}}
 
-    async def fake_run_risk_discovery(settings, session) -> dict:
+    async def fake_run_risk_discovery(settings, session, client_org_id=None) -> dict:
         return {"candidates_found": 0}
 
     async def fake_score_risks_job(settings, session, issue_ids, job_id, *, client_org_id) -> list:
@@ -95,11 +102,23 @@ def _stub_domain_functions(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(tasks, "run_risk_owner_assignment_job", fake_run_risk_owner_assignment_job)
 
 
+def _sample_documents(count: int = 2) -> list[dict[str, str]]:
+    return [
+        {
+            "document_id": f"fake-document-{index}",
+            "filename": f"doc-{index}.pdf",
+            "document_registry_id": "",
+        }
+        for index in range(1, count + 1)
+    ]
+
+
 def test_canvas_with_documents_runs_end_to_end() -> None:
     org = _create_org()
     run = _create_run(org["id"])
+    documents = _sample_documents(2)
 
-    task_id = orchestrator.enqueue_pipeline(run["id"], ["fake-document-1", "fake-document-2"])
+    task_id = orchestrator.enqueue_pipeline(run["id"], documents)
     assert task_id
 
     final = _get_run(run["id"])
@@ -123,6 +142,48 @@ def test_canvas_with_documents_runs_end_to_end() -> None:
     extract_steps = [s for s in steps if s["stage"] == "extract_controls"]
     assert len(extract_steps) == 2
     assert all(s["status"] == "completed" for s in steps)
+    for step in extract_steps:
+        assert step["document_id"] in {doc["document_id"] for doc in documents}
+        assert step["filename"] in {doc["filename"] for doc in documents}
+
+    ingest_steps = [s for s in steps if s["stage"] == "ingest_register"]
+    assert len(ingest_steps) == 2
+    for step in ingest_steps:
+        assert step["document_id"] in {doc["document_id"] for doc in documents}
+        assert step["filename"] in {doc["filename"] for doc in documents}
+
+    classify_steps = [s for s in steps if s["stage"] == "classify_issues"]
+    assert len(classify_steps) == 2
+    for step in classify_steps:
+        assert step["document_id"] in {doc["document_id"] for doc in documents}
+        assert step["filename"] in {doc["filename"] for doc in documents}
+
+
+def test_canvas_single_document_populates_metadata_on_all_stages() -> None:
+    org = _create_org()
+    run = _create_run(org["id"])
+    documents = _sample_documents(1)
+
+    orchestrator.enqueue_pipeline(run["id"], documents)
+
+    steps = _list_steps(run["id"])
+    doc = documents[0]
+    for stage in (
+        "ingest_register",
+        "extract_controls",
+        "issues_from_controls",
+        "classify_issues",
+        "generate_charts",
+        "risk_discovery",
+        "score_risks",
+        "risk_tagging",
+        "risk_owner_assignment",
+    ):
+        stage_steps = [s for s in steps if s["stage"] == stage]
+        assert len(stage_steps) == 1, stage
+        step = stage_steps[0]
+        assert step["document_id"] == doc["document_id"]
+        assert step["filename"] == doc["filename"]
 
 
 def test_canvas_with_no_documents_still_completes() -> None:

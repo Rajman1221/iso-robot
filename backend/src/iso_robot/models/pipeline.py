@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from iso_robot.models.base import Base, GUID, Timestamp
@@ -30,7 +30,10 @@ PIPELINE_STAGES = (
     "complete",
 )
 
-RUN_STATUSES = ("queued", "running", "completed", "failed")
+# "waiting" = accepted but not yet started because the org already has an active
+# run (the queued-runs feature). It counts as active for status/metrics but not
+# for the has_active_run lock.
+RUN_STATUSES = ("queued", "waiting", "running", "completed", "failed")
 STEP_STATUSES = ("pending", "running", "completed", "failed", "skipped")
 
 
@@ -54,6 +57,10 @@ class DocumentRegistry(Base):
     created_at: Mapped[Any] = Timestamp()
     updated_at: Mapped[Any] = Timestamp(onupdate=True)
 
+    __table_args__ = (
+        Index("uq_document_registry_org_sha256", "client_org_id", "sha256", unique=True),
+    )
+
 
 class PipelineRun(Base):
     __tablename__ = "pipeline_runs"
@@ -72,6 +79,10 @@ class PipelineRun(Base):
     celery_root_task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     requested_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Per-stage batch bookkeeping for the v2 dispatcher: {stage: {total_batches,
+    # completed_batches, failed_batches}}. Drives intra-stage progress percent
+    # and resumable re-dispatch of only the incomplete batches.
+    stage_totals_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     started_at: Mapped[Optional[Any]] = Timestamp(nullable=True)
     completed_at: Mapped[Optional[Any]] = Timestamp(nullable=True)
     created_at: Mapped[Any] = Timestamp()
@@ -91,6 +102,8 @@ class PipelineDocumentStep(Base):
     document_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     filename: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     stage: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    # Set on batch-level step rows (v2 dispatcher); NULL for per-document/run rows.
+    batch_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", index=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     result_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

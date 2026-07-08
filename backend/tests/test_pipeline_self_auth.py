@@ -34,8 +34,8 @@ def self_client(monkeypatch: pytest.MonkeyPatch):
 
     calls: list[dict[str, Any]] = []
 
-    def _fake_enqueue(run_id: str, document_ids: list[str]) -> str:
-        calls.append({"run_id": run_id, "document_ids": document_ids})
+    def _fake_enqueue(run_id: str, documents: list[dict[str, Any]]) -> str:
+        calls.append({"run_id": run_id, "documents": documents})
         return f"fake-task-{run_id}"
 
     monkeypatch.setattr("iso_robot.handlers.pipeline.enqueue_pipeline", _fake_enqueue)

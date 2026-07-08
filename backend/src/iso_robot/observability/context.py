@@ -72,3 +72,8 @@ def get_context() -> dict[str, Any]:
 
 def get_trace_id() -> Optional[str]:
     return _trace_id.get()
+
+
+def get_task_name() -> Optional[str]:
+    """Current Celery task short-name, if running inside one (else None)."""
+    return _task_name.get()

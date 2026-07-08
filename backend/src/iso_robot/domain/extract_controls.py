@@ -14,6 +14,7 @@ from iso_robot.config import Settings
 from iso_robot.domain.heuristics import heuristic_controls_from_text
 from iso_robot.domain.indexing_service import build_indexing_service
 from iso_robot.domain.llm_service import chat_json_object
+from iso_robot.helpers.concurrency import gather_bounded
 from iso_robot.helpers.pdf_text import extract_pdf_text, extract_pdf_text_with_page_markers
 from iso_robot.helpers.text_chunk import chunk_by_chars
 from iso_robot.integrations.document_intelligence import analyze_pdf_bytes_marked
@@ -168,7 +169,12 @@ async def _llm_controls_from_chunk(
         retry=retry,
         has_page_markers=has_pm,
     )
-    data = await chat_json_object(settings, system=_control_system_prompt(has_page_markers=has_pm), user=user)
+    data = await chat_json_object(
+        settings,
+        system=_control_system_prompt(has_page_markers=has_pm),
+        user=user,
+        stage="extract_controls",
+    )
     raw = data.get("controls")
     if not isinstance(raw, list):
         return []
@@ -295,7 +301,12 @@ async def _iter_di_page_batch_texts(
     *,
     pages_per_batch: int,
 ) -> AsyncIterator[tuple[int, int, str]]:
-    """Yield (batch_index, total_batches, marked_text) as each DI page batch completes."""
+    """Yield (batch_index, total_batches, marked_text) for each DI page batch.
+
+    The Azure DI analyze calls are pure network I/O (no DB), so they run
+    concurrently under ``settings.di_batch_concurrency`` while results are still
+    yielded in page order.
+    """
     try:
         from pypdf import PdfReader, PdfWriter
     except Exception:
@@ -309,6 +320,9 @@ async def _iter_di_page_batch_texts(
         return
     step = max(1, pages_per_batch)
     total_batches = (total_pages + step - 1) // step
+
+    # First slice the PDF into per-batch byte blobs (pypdf only — no network/DB).
+    batch_blobs: List[tuple[int, int, int, bytes]] = []  # (batch_idx, start, end, bytes)
     for batch_idx, start in enumerate(range(0, total_pages, step)):
         end = min(total_pages, start + step)
         writer = PdfWriter()
@@ -317,19 +331,39 @@ async def _iter_di_page_batch_texts(
         buf = io.BytesIO()
         try:
             await asyncio.to_thread(writer.write, buf)
-            seg_bytes = buf.getvalue()
-            seg_text = await analyze_pdf_bytes_marked(settings, seg_bytes)
-            seg_text = _shift_page_markers(seg_text or "", page_offset=start).strip()
-            if seg_text:
-                yield batch_idx, total_batches, seg_text
         except Exception as seg_exc:
             logger.warning(
-                "DI batch failed for %s pages %s-%s: %s",
-                path.name,
-                start + 1,
-                end,
-                seg_exc,
+                "DI batch slice failed for %s pages %s-%s: %s",
+                path.name, start + 1, end, seg_exc,
             )
+            continue
+        batch_blobs.append((batch_idx, start, end, buf.getvalue()))
+
+    if not batch_blobs:
+        return
+
+    # Analyze the batches concurrently; the shared AsyncSession is never touched
+    # here so this is safe, and results come back in submission (page) order.
+    analyzed = await gather_bounded(
+        [
+            (lambda b=blob: analyze_pdf_bytes_marked(settings, b))
+            for (_bi, _st, _en, blob) in batch_blobs
+        ],
+        limit=settings.di_batch_concurrency,
+        label="di_page_batch",
+        return_exceptions=True,
+    )
+
+    for (batch_idx, start, end, _blob), seg_text in zip(batch_blobs, analyzed):
+        if isinstance(seg_text, BaseException):
+            logger.warning(
+                "DI batch failed for %s pages %s-%s: %s",
+                path.name, start + 1, end, seg_text,
+            )
+            continue
+        seg_text = _shift_page_markers(seg_text or "", page_offset=start).strip()
+        if seg_text:
+            yield batch_idx, total_batches, seg_text
 
 
 def _iter_char_chunks(text: str, settings: Settings) -> List[str]:
@@ -427,20 +461,19 @@ async def _iter_document_text_segments(
 
 
 async def _persist_controls_from_segment(
-    settings: Settings,
     *,
-    label: str,
-    text: str,
-    segment_index: int,
-    total_segments: int,
+    part: List[Dict[str, Any]],
     document_id: str,
     client_org_id: Optional[str],
     ctrl_repo: ControlRepository,
     seen_keys: set[str],
 ) -> int:
-    part = await _controls_from_chunk_with_fallback(
-        settings, label, text, segment_index, total_segments
-    )
+    """Dedup an already-extracted segment against ``seen_keys`` and persist it.
+
+    The LLM/parse step runs concurrently upstream; this DB-touching pass stays
+    sequential so the shared AsyncSession is only ever used by one coroutine.
+    Returns the number of rows inserted.
+    """
     batch: List[Dict[str, Any]] = []
     for c in part:
         ct = (c.get("control_text") or "").strip()
@@ -504,7 +537,12 @@ async def extract_controls_for_document(
     *,
     job_id: Optional[str] = None,
     jobs: Optional[JobRepository] = None,
-) -> int:
+) -> List[str]:
+    """Re-extract a document's controls; return the ids of the controls created.
+
+    Also incrementally re-indexes ONLY this document's controls in the vector
+    store — never an org-wide reindex.
+    """
     doc_repo = DocumentRepository(conn)
     ctrl_repo = ControlRepository(conn)
     row = await doc_repo.get_by_id(document_id)
@@ -520,22 +558,57 @@ async def extract_controls_for_document(
     if path.suffix.lower() != ".pdf":
         raise ValueError(f"Only PDF extraction is supported; got {path.suffix}")
 
+    # Remember the controls we are about to replace so their (now-stale) vector
+    # chunks can be purged after re-extraction — each run mints fresh UUIDs, so
+    # index_controls (which only delete-then-inserts the *new* ids) would leave
+    # the old chunks orphaned.
+    old_control_ids = [str(c["id"]) for c in await ctrl_repo.get_by_document(document_id)]
     await ctrl_repo.delete_for_document(document_id)
 
     pdf_bytes = await asyncio.to_thread(path.read_bytes)
     label = f"{row.get('filename') or path.name} ({document_id})"
     seen_keys: set[str] = set()
     running_total = 0
-    segments_seen = 0
 
-    async for seg_idx, total_segs, text, source in _iter_document_text_segments(settings, path, pdf_bytes):
-        segments_seen += 1
+    # Text segmentation (DI / local PDF) touches no DB, so materialize it and run
+    # the per-segment LLM extraction concurrently below.
+    segments = [seg async for seg in _iter_document_text_segments(settings, path, pdf_bytes)]
+    if not segments:
+        logger.info("No text extracted for document %s", document_id)
+        return []
+
+    # Concurrency rule: ONLY the pure LLM/parse step fans out. The shared
+    # AsyncSession is never touched here, so it can't be used by two coroutines
+    # at once — every DB write happens in the sequential persist pass afterwards.
+    extracted = await gather_bounded(
+        [
+            (
+                lambda text=text, idx=seg_idx, total=total_segs: _controls_from_chunk_with_fallback(
+                    settings, label, text, idx, total
+                )
+            )
+            for (seg_idx, total_segs, text, source) in segments
+        ],
+        limit=settings.extract_segment_concurrency,
+        label="extract_controls_segment",
+        return_exceptions=True,
+    )
+
+    # Sequential persist pass: dedup (seen_keys) + insert per segment, in order,
+    # preserving the original first-occurrence-wins dedup semantics.
+    for (seg_idx, total_segs, text, source), part in zip(segments, extracted):
+        if isinstance(part, BaseException):
+            # Error isolation: a single failing segment must not kill the run.
+            logger.warning(
+                "Controls segment %s/%s (%s) extraction failed: %s — skipping",
+                seg_idx + 1,
+                total_segs,
+                source,
+                part,
+            )
+            continue
         added = await _persist_controls_from_segment(
-            settings,
-            label=label,
-            text=text,
-            segment_index=seg_idx,
-            total_segments=total_segs,
+            part=part,
             document_id=document_id,
             client_org_id=client_org_id,
             ctrl_repo=ctrl_repo,
@@ -563,17 +636,30 @@ async def extract_controls_for_document(
             segment_controls=added,
         )
 
-    if segments_seen == 0:
-        logger.info("No text extracted for document %s", document_id)
-        return 0
-
     logger.info(
         "Controls extraction finished document=%s rows=%s path=%s",
         document_id,
         running_total,
         path.name,
     )
-    return running_total
+
+    # Incrementally index ONLY this document's controls — replaces the old
+    # per-document org-wide reindex that re-embedded the entire growing corpus.
+    controls_for_doc = await ctrl_repo.get_by_document(document_id)
+    created_ids = [str(c["id"]) for c in controls_for_doc]
+    if client_org_id:
+        indexing = build_indexing_service(settings, conn)
+        if old_control_ids:
+            # Purge chunks for the superseded controls (their UUIDs no longer exist);
+            # index_controls only clears the *new* entity ids before upserting.
+            await indexing._vectors.delete_by_entity_ids(
+                client_org_id=client_org_id,
+                entity_type="control",
+                entity_ids=old_control_ids,
+            )
+        await indexing.index_controls(client_org_id, controls_for_doc)
+
+    return created_ids
 
 
 async def run_extract_controls_job(
@@ -582,7 +668,7 @@ async def run_extract_controls_job(
     payload: dict[str, Any],
     *,
     job_id: Optional[str] = None,
-) -> None:
+) -> dict[str, Any]:
     raw_ids = payload.get("document_ids")
     doc_repo = DocumentRepository(conn)
     jobs = JobRepository(conn) if job_id else None
@@ -593,6 +679,10 @@ async def run_extract_controls_job(
         doc_ids = [str(r["id"]) for r in rows if str(r.get("path", "")).lower().endswith(".pdf")]
 
     cid = payload.get("client_org_id")
+    # Ids of the controls (re)created this run — the Celery layer uses these to
+    # drive incremental issue generation. Each document is indexed on its own
+    # inside extract_controls_for_document (no org-wide reindex per document).
+    control_ids: List[str] = []
     for doc_idx, doc_id in enumerate(doc_ids):
         if jobs and job_id:
             await jobs.merge_payload(
@@ -606,13 +696,15 @@ async def run_extract_controls_job(
                 },
             )
         try:
-            await extract_controls_for_document(
-                settings,
-                conn,
-                doc_id,
-                client_org_id=cid,
-                job_id=job_id,
-                jobs=jobs,
+            control_ids.extend(
+                await extract_controls_for_document(
+                    settings,
+                    conn,
+                    doc_id,
+                    client_org_id=cid,
+                    job_id=job_id,
+                    jobs=jobs,
+                )
             )
         except (FileNotFoundError, PermissionError, OSError):
             raise
@@ -621,14 +713,4 @@ async def run_extract_controls_job(
             if not settings.use_llm_fallback:
                 raise
 
-    # Refresh the control chunks in the vector index once per job
-    indexing = build_indexing_service(settings, conn)
-    org_ids: set[str] = {str(cid)} if cid else set()
-    if not org_ids:
-        ctrl_repo = ControlRepository(conn)
-        for doc_id in doc_ids:
-            for control in await ctrl_repo.get_by_document(doc_id):
-                if control.get("client_org_id"):
-                    org_ids.add(str(control["client_org_id"]))
-    for org_id in org_ids:
-        await indexing.reindex_controls(org_id)
+    return {"control_ids": control_ids, "documents": len(doc_ids)}

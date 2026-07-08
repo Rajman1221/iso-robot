@@ -255,7 +255,7 @@ async def test_step_fail_records_error(db_session: AsyncSession, org: dict) -> N
     assert fetched["error"] == "extraction blew up"
 
 
-async def test_find_run_level_by_stage_ignores_per_document_steps(db_session: AsyncSession, org: dict) -> None:
+async def test_find_run_level_by_stage_prefers_step_with_result_json(db_session: AsyncSession, org: dict) -> None:
     run_repo = PipelineRunRepository(db_session)
     steps = PipelineStepRepository(db_session)
     registry_repo = DocumentRegistryRepository(db_session)

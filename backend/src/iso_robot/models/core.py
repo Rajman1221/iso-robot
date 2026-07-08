@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from sqlalchemy import Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from iso_robot.models.base import Base, GUID, Timestamp
@@ -62,7 +62,20 @@ class Issue(Base):
     region_hint: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw_payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     client_org_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    # Deterministic dedup key for incremental issue generation. NULL for issues
+    # created before this column existed (SQL treats NULLs as distinct, so they
+    # never collide under the unique index below).
+    source_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[Any] = Timestamp()
+
+    __table_args__ = (
+        Index(
+            "uq_issues_org_fingerprint",
+            "client_org_id",
+            "source_fingerprint",
+            unique=True,
+        ),
+    )
 
 
 class IssueClassification(Base):

@@ -44,6 +44,51 @@ class IssueRepository:
         )
         await self._session.commit()
 
+    async def insert_many(self, rows: List[dict[str, Any]]) -> int:
+        """Bulk-insert issues in a single transaction (one commit for the batch).
+
+        Each row: ``{id, title, body, region_hint?, raw_payload?, client_org_id?,
+        source_fingerprint?, risk_source_id?}``. Returns the number inserted.
+        """
+        if not rows:
+            return 0
+        for r in rows:
+            self._session.add(
+                Issue(
+                    id=r["id"],
+                    risk_source_id=r.get("risk_source_id"),
+                    title=r.get("title"),
+                    body=r.get("body"),
+                    effective_date=r.get("effective_date"),
+                    region_hint=r.get("region_hint"),
+                    raw_payload_json=r.get("raw_payload") or {},
+                    client_org_id=r.get("client_org_id"),
+                    source_fingerprint=r.get("source_fingerprint"),
+                )
+            )
+        await self._session.commit()
+        return len(rows)
+
+    async def list_fingerprints(
+        self, client_org_id: str, fingerprints: List[str]
+    ) -> set[str]:
+        """Return which of ``fingerprints`` already exist for this org.
+
+        Cheap pre-check for incremental generation; the unique index is still the
+        real backstop against races.
+        """
+        if not fingerprints:
+            return set()
+        rows = (
+            await self._session.execute(
+                select(Issue.source_fingerprint).where(
+                    Issue.client_org_id == client_org_id,
+                    Issue.source_fingerprint.in_(fingerprints),
+                )
+            )
+        ).scalars().all()
+        return {str(fp) for fp in rows if fp}
+
     async def upsert(
         self,
         *,

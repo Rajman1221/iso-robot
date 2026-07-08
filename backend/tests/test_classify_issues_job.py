@@ -38,8 +38,10 @@ async def test_classify_issues_job_skips_already_classified_when_reclassify_fals
         model_version="test",
     )
 
-    mock_classify = AsyncMock(return_value={"pestel_items": []})
-    monkeypatch.setattr("iso_robot.domain.classify_issues.classify_issue", mock_classify)
+    # The job now classifies via the internal _classify_row_llm seam (LLM-only,
+    # concurrent) rather than the single-issue classify_issue helper.
+    mock_llm = AsyncMock(return_value=({"pestel_items": []}, "test"))
+    monkeypatch.setattr("iso_robot.domain.classify_issues._classify_row_llm", mock_llm)
 
     count = await classify_issues_job(
         get_settings(),
@@ -49,8 +51,9 @@ async def test_classify_issues_job_skips_already_classified_when_reclassify_fals
     )
 
     assert count == 1
-    mock_classify.assert_awaited_once()
-    assert mock_classify.await_args.args[2] == unclassified_id
+    mock_llm.assert_awaited_once()
+    # args = (settings, row); the only classified row must be the unclassified one.
+    assert mock_llm.await_args.args[1]["id"] == unclassified_id
 
 
 @pytest.mark.asyncio
@@ -78,8 +81,8 @@ async def test_classify_issues_job_reclassifies_all_when_reclassify_true(
             model_version="test",
         )
 
-    mock_classify = AsyncMock(return_value={"pestel_items": []})
-    monkeypatch.setattr("iso_robot.domain.classify_issues.classify_issue", mock_classify)
+    mock_llm = AsyncMock(return_value=({"pestel_items": []}, "test"))
+    monkeypatch.setattr("iso_robot.domain.classify_issues._classify_row_llm", mock_llm)
 
     count = await classify_issues_job(
         get_settings(),
@@ -89,4 +92,4 @@ async def test_classify_issues_job_reclassifies_all_when_reclassify_true(
     )
 
     assert count == 2
-    assert mock_classify.await_count == 2
+    assert mock_llm.await_count == 2

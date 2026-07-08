@@ -39,6 +39,38 @@ class IssueControlRepository:
         await self._session.commit()
         return count
 
+    async def assign_many(self, mapping: dict[str, List[str]]) -> int:
+        """Link many issues to their controls in a single commit.
+
+        ``mapping`` is ``{issue_id: [control_id, ...]}``. Deduplicates against
+        both the incoming lists and rows already present for those issues.
+        Returns the number of new links created.
+        """
+        if not mapping:
+            return 0
+        issue_ids = list(mapping.keys())
+        existing = set(
+            (
+                await self._session.execute(
+                    select(IssueControl.issue_id, IssueControl.control_id).where(
+                        IssueControl.issue_id.in_(issue_ids)
+                    )
+                )
+            ).all()
+        )
+        count = 0
+        for issue_id, control_ids in mapping.items():
+            for cid in control_ids:
+                cid = str(cid).strip()
+                key = (issue_id, cid)
+                if not cid or key in existing:
+                    continue
+                self._session.add(IssueControl(issue_id=issue_id, control_id=cid))
+                existing.add(key)
+                count += 1
+        await self._session.commit()
+        return count
+
     async def clear(self, issue_id: str) -> None:
         """Remove all control links for an issue (used before re-assigning)."""
         rows = (

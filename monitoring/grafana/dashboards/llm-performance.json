@@ -1,0 +1,124 @@
+{
+  "uid": "iso-llm-performance",
+  "title": "ISO Robot — LLM Performance",
+  "tags": ["iso-robot", "llm", "azure-openai"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "LLM Request Rate by Stage",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [
+        {"expr": "sum by (stage) (rate(llm_requests_total[5m]))", "legendFormat": "{{stage}}", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 2,
+      "title": "LLM Error Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0}, "overrides": []},
+      "targets": [
+        {"expr": "sum(rate(llm_requests_total{status!=\"ok\"}[5m])) / sum(rate(llm_requests_total[5m]))", "legendFormat": "error rate", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 3,
+      "title": "LLM Latency p50 / p95 / p99",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le,stage) (rate(llm_request_duration_seconds_bucket[5m])))", "legendFormat": "p50 {{stage}}", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum by (le,stage) (rate(llm_request_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{stage}}", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum by (le,stage) (rate(llm_request_duration_seconds_bucket[5m])))", "legendFormat": "p99 {{stage}}", "refId": "C"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 4,
+      "title": "Tokens / min by Kind",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "targets": [
+        {"expr": "sum by (kind) (rate(llm_tokens_total[5m])) * 60", "legendFormat": "{{kind}}", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 5,
+      "title": "Estimated Cost / hour",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "currencyUSD", "decimals": 2}, "overrides": []},
+      "targets": [
+        {"expr": "sum(rate(llm_cost_usd_total[5m])) * 3600", "legendFormat": "$/hour", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 6,
+      "title": "Retry Rate by Reason",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [
+        {"expr": "sum by (reason) (rate(llm_retries_total[5m]))", "legendFormat": "{{reason}}", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 7,
+      "title": "Embedding Request Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [
+        {"expr": "sum by (status) (rate(embedding_requests_total[5m]))", "legendFormat": "{{status}}", "refId": "A"},
+        {"expr": "sum(rate(embedding_texts_total[5m])) * 60", "legendFormat": "texts/min", "refId": "B"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 8,
+      "title": "Embedding Latency p95",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(embedding_request_duration_seconds_bucket[5m])))", "legendFormat": "p95", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 9,
+      "title": "Azure DI Request Rate by Operation",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [
+        {"expr": "sum by (operation,status) (rate(azure_di_requests_total[5m]))", "legendFormat": "{{operation}} {{status}}", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    },
+    {
+      "id": 10,
+      "title": "Azure DI Latency p95 by Operation",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum by (le,operation) (rate(azure_di_request_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{operation}}", "refId": "A"}
+      ],
+      "datasource": {"type": "prometheus", "uid": "Prometheus"}
+    }
+  ]
+}

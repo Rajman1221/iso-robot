@@ -105,6 +105,29 @@ def extract_readable_layout_from_result(result: Any) -> str:
     return "\n".join(lines) if lines else ""
 
 
+def _poll_with_metrics(poller: Any, settings: Settings, *, operation: str) -> Any:
+    """Wait for a DI poller with a timeout, recording latency + outcome metrics."""
+    import time
+
+    from iso_robot.observability.metrics import (
+        AZURE_DI_REQUEST_DURATION_SECONDS,
+        AZURE_DI_REQUESTS_TOTAL,
+    )
+
+    start = time.perf_counter()
+    try:
+        result = poller.result(timeout=settings.azure_di_timeout_seconds)
+    except Exception:
+        AZURE_DI_REQUESTS_TOTAL.labels(operation=operation, status="error").inc()
+        raise
+    finally:
+        AZURE_DI_REQUEST_DURATION_SECONDS.labels(operation=operation).observe(
+            time.perf_counter() - start
+        )
+    AZURE_DI_REQUESTS_TOTAL.labels(operation=operation, status="ok").inc()
+    return result
+
+
 def analyze_pdf_bytes_sync(settings: Settings, pdf_bytes: bytes) -> str:
     client = get_document_intelligence_client(settings)
     if client is None:
@@ -118,7 +141,9 @@ def analyze_pdf_bytes_sync(settings: Settings, pdf_bytes: bytes) -> str:
         "prebuilt-layout",
         AnalyzeDocumentRequest(bytes_source=pdf_bytes),
     )
-    result = poller.result()
+    # Bound the blocking wait so a stuck analyze can't pin a worker slot for the
+    # whole task time limit.
+    result = _poll_with_metrics(poller, settings, operation="full")
     text = extract_readable_layout_from_result(result)
     if not text.strip():
         logger.warning("Document Intelligence returned empty text for PDF.")
@@ -139,7 +164,7 @@ def analyze_pdf_bytes_marked_sync(settings: Settings, pdf_bytes: bytes) -> str:
         "prebuilt-layout",
         AnalyzeDocumentRequest(bytes_source=pdf_bytes),
     )
-    result = poller.result()
+    result = _poll_with_metrics(poller, settings, operation="page_batch")
     text = extract_layout_text_with_page_markers(result)
     if not text.strip():
         logger.warning("Document Intelligence returned empty text for PDF.")

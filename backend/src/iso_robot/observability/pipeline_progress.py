@@ -27,61 +27,36 @@ def parse_timestamp(value: Any) -> Optional[datetime]:
         return None
 
 
-def progress_percent(status: str, current_stage: str) -> int:
+def progress_percent(
+    status: str,
+    current_stage: str,
+    stage_totals: Optional[dict[str, Any]] = None,
+) -> int:
+    """Overall completion percent for a run.
+
+    Base is the stage index; if ``stage_totals`` carries batch counts for the
+    current stage (``{stage: {total_batches, completed_batches}}``), the fraction
+    of that stage's batches already done is added so progress advances smoothly
+    within a long stage instead of jumping only at stage boundaries.
+    """
     if status == "completed":
         return 100
+    span = max(len(PIPELINE_STAGES) - 1, 1)
     try:
         idx = PIPELINE_STAGES.index(current_stage)
     except ValueError:
         idx = 0
-    return round(idx / max(len(PIPELINE_STAGES) - 1, 1) * 100)
 
+    intra = 0.0
+    if isinstance(stage_totals, dict):
+        entry = stage_totals.get(current_stage)
+        if isinstance(entry, dict):
+            total = entry.get("total_batches") or 0
+            done = entry.get("completed_batches") or 0
+            if total > 0:
+                intra = min(max(done / total, 0.0), 1.0)
 
-def elapsed_seconds(started_at: Any, *, now: Optional[datetime] = None) -> Optional[float]:
-    start = parse_timestamp(started_at)
-    if start is None:
-        return None
-    now = now or datetime.now(timezone.utc)
-    return max((now - start).total_seconds(), 0.0)
-
-
-def estimate_remaining_seconds(
-    *,
-    status: str,
-    current_stage: str,
-    started_at: Any,
-    steps: list[dict[str, Any]],
-) -> Optional[float]:
-    if status not in ("queued", "running"):
-        return 0.0 if status == "completed" else None
-
-    elapsed = elapsed_seconds(started_at)
-    if elapsed is None:
-        return None
-
-    progress = progress_percent(status, current_stage)
-    if progress <= 0:
-        return None
-    if progress >= 100:
-        return 0.0
-
-    stage_durations: list[float] = []
-    for step in steps:
-        s_start = parse_timestamp(step.get("started_at"))
-        s_end = parse_timestamp(step.get("completed_at"))
-        if s_start and s_end and s_end > s_start:
-            stage_durations.append((s_end - s_start).total_seconds())
-
-    if stage_durations:
-        avg_stage = sum(stage_durations) / len(stage_durations)
-        try:
-            stage_idx = PIPELINE_STAGES.index(current_stage)
-        except ValueError:
-            stage_idx = 0
-        remaining_stages = max(len(PIPELINE_STAGES) - 1 - stage_idx, 0)
-        return avg_stage * remaining_stages
-
-    return elapsed * (100 - progress) / progress
+    return round((idx + intra) / span * 100)
 
 
 def stage_summary(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:

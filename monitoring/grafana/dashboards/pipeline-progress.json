@@ -38,20 +38,10 @@
       "datasource": {"type": "prometheus", "uid": "Prometheus"}
     },
     {
-      "id": 4,
-      "title": "Estimated Remaining (seconds)",
-      "type": "timeseries",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
-      "targets": [
-        {"expr": "pipeline_run_estimated_remaining_seconds", "legendFormat": "{{pipeline_run_id}}", "refId": "A"}
-      ],
-      "datasource": {"type": "prometheus", "uid": "Prometheus"}
-    },
-    {
       "id": 5,
       "title": "Documents Processed",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
       "targets": [
         {"expr": "sum(rate(pipeline_documents_processed_total[5m])) by (status)", "legendFormat": "{{status}}", "refId": "A"}
       ],

@@ -22,6 +22,14 @@ class CandidateRiskRepository:
         await self._session.execute(delete(CandidateRisk))
         await self._session.commit()
 
+    async def clear_for_org(self, client_org_id: str) -> None:
+        """Delete only one org's candidate risks (tenant-safe replacement for
+        clear_all — a re-run for one org must not wipe other orgs' discovery)."""
+        await self._session.execute(
+            delete(CandidateRisk).where(CandidateRisk.client_org_id == client_org_id)
+        )
+        await self._session.commit()
+
     async def insert(
         self,
         *,
@@ -31,6 +39,7 @@ class CandidateRiskRepository:
         description: Optional[str],
         domain: Optional[str],
         confidence: Optional[float],
+        client_org_id: Optional[str] = None,
     ) -> None:
         self._session.add(
             CandidateRisk(
@@ -40,12 +49,18 @@ class CandidateRiskRepository:
                 description=description,
                 domain=domain,
                 confidence=confidence,
+                client_org_id=client_org_id,
             )
         )
         await self._session.commit()
 
-    async def list_all(self, limit: int = 500, offset: int = 0) -> List[dict[str, Any]]:
-        stmt = select(CandidateRisk).order_by(CandidateRisk.created_at.desc()).limit(limit).offset(offset)
+    async def list_all(
+        self, limit: int = 500, offset: int = 0, client_org_id: Optional[str] = None
+    ) -> List[dict[str, Any]]:
+        stmt = select(CandidateRisk)
+        if client_org_id:
+            stmt = stmt.where(CandidateRisk.client_org_id == client_org_id)
+        stmt = stmt.order_by(CandidateRisk.created_at.desc()).limit(limit).offset(offset)
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_with_issue_ids(to_dict(r)) for r in rows]
 

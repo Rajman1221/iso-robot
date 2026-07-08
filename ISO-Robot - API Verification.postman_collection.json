@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c5f74daa-904f-4817-9aaf-a1e7dbd344db",
     "name": "ISO-Robot - API Verification",
-    "description": "# ISO Robot API v1\n\n**Base URL:** `{{baseUrl}}` → `http://localhost:8000/api/v1`\n**Host root:** `{{stageURL}}` → `http://localhost:8000`\n\n## Quick start (automated pipeline — Docker)\n\n1. `docker compose up --build` (default `AUTH_MODE=self` — no extra auth env needed)\n2. **01 Auth → Login (Analyst)** — saves `token` and `clientOrgId`\n3. *(One-time if library empty)* **06 Risk Discovery → Seed risk library**\n4. If blocked by `409 PIPELINE_RUN_IN_PROGRESS`, run **Automated Pipeline → Cancel active pipeline run**\n5. **Automated Pipeline → Ingest documents** — attach `backend/fixtures/sample_control.pdf`, returns 202 + `pipelineRunId`\n6. **Automated Pipeline → Pipeline status (latest run)** — re-send until `status` = `completed`\n7. **11 Fetch Latest Data** + **10 Risk Owner Assignment** GETs to verify outputs\n\nRe-import this file from the **repo root** after updates — do not use an old Downloads copy.\n\n## Authentication (AUTH_MODE=self, default)\n\nISO Robot issues and validates its own JWT. **Every protected route — including the pipeline — uses the same login token.**\n\n| Route | Auth |\n|-------|------|\n| `POST /auth/login`, `GET /health` | **None** |\n| `POST /ingest/{clientOrgId}`, `GET /pipeline/status/{clientOrgId}`, `POST /pipeline/cancel/{clientOrgId}` | `Authorization: Bearer {{token}}` (from Login; user's org must match path) |\n| Everything else | `Authorization: Bearer {{token}}` |\n\nLogin sets: `token`, `clientOrgId`.\n\nLegacy `AUTH_MODE=external` (optional): pipeline instead requires `X-User-Id`, `X-User-Email`, `X-Org-Id` plus an external token — not used by this collection.\n\n## End-to-end flow\n\n```mermaid\nflowchart TD\n    A[Login] --> B[Ingest PDF]\n    B --> C[\"Poll pipeline status\"]\n    C --> D[Fetch Latest Data GETs]\n    D --> E[Owner recommendations]\n    E --> F[Chatbot optional]\n```\n\n## Error format\n\n```json\n{ \"detail\": \"Human message\", \"code\": \"ERROR_CODE\" }\n```\n\n| HTTP | code | Meaning |\n|------|------|---------|\n| 401 | UNAUTHORIZED | Missing/invalid Bearer header |\n| 403 | FORBIDDEN | Org mismatch |\n| 404 | PIPELINE_RUN_NOT_FOUND | No runs yet or bad pipeline_run_id |\n| 409 | PIPELINE_RUN_IN_PROGRESS | Another ingest still active |\n\n## Remaining job endpoints\n\nChatbot reindex (`POST /chatbot/reindex`) and Reference/Legacy debug endpoints still use the background job pattern: start → poll `GET /jobs/{jobId}`.\n",
+    "description": "# ISO Robot API v1\n\n**Base URL:** `{{baseUrl}}` → `http://localhost:8000/api/v1`\n**Host root:** `{{stageURL}}` → `http://localhost:8000`\n\n## Quick start (automated pipeline — Docker)\n\n1. `docker compose up --build` (default `AUTH_MODE=self` — no extra auth env needed)\n2. **01 Auth → Login (Analyst)** — saves `token` and `clientOrgId`\n3. *(One-time if library empty)* **06 Risk Discovery → Seed risk library**\n4. If blocked by `409 PIPELINE_RUN_IN_PROGRESS`, run **Automated Pipeline → Cancel active pipeline run**\n5. **Automated Pipeline → Ingest documents** — attach `backend/fixtures/sample_control.pdf`, returns 202 + `pipelineRunId`\n6. **Automated Pipeline → Pipeline status (latest run)** — re-send until `status` = `completed`\n7. **11 Fetch Latest Data** + **10 Risk Owner Assignment** GETs to verify outputs\n\nRe-import this file from the **repo root** after updates — do not use an old Downloads copy.\n\n## Authentication (AUTH_MODE=self, default)\n\nISO Robot issues and validates its own JWT. **Every protected route — including the pipeline — uses the same login token.**\n\n| Route | Auth |\n|-------|------|\n| `POST /auth/login`, `GET /health` | **None** |\n| `POST /ingest/{clientOrgId}`, `GET /pipeline/status/{clientOrgId}`, `GET /pipeline/runs/{clientOrgId}`, `POST /pipeline/cancel/{clientOrgId}` | `Authorization: Bearer {{token}}` (from Login; user's org must match path) |\n| Everything else | `Authorization: Bearer {{token}}` |\n\nLogin sets: `token`, `clientOrgId`.\n\nLegacy `AUTH_MODE=external` (optional): pipeline instead requires `X-User-Id`, `X-User-Email`, `X-Org-Id` plus an external token — not used by this collection.\n\n## End-to-end flow\n\n```mermaid\nflowchart TD\n    A[Login] --> B[Ingest PDF]\n    B --> C[\"Poll pipeline status\"]\n    C --> D[Fetch Latest Data GETs]\n    D --> E[Owner recommendations]\n    E --> F[Chatbot optional]\n```\n\n## Error format\n\n```json\n{ \"detail\": \"Human message\", \"code\": \"ERROR_CODE\" }\n```\n\n| HTTP | code | Meaning |\n|------|------|---------|\n| 401 | UNAUTHORIZED | Missing/invalid Bearer header |\n| 403 | FORBIDDEN | Org mismatch |\n| 404 | PIPELINE_RUN_NOT_FOUND | No runs yet or bad pipeline_run_id |\n| 409 | PIPELINE_RUN_IN_PROGRESS | Another ingest still active |\n\n## Remaining job endpoints\n\nChatbot reindex (`POST /chatbot/reindex`) and Reference/Legacy debug endpoints still use the background job pattern: start → poll `GET /jobs/{jobId}`.\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "25305867"
   },
@@ -270,7 +270,7 @@
           "response": []
         }
       ],
-      "description": "**Step 1.** Login is public. Saves `token` and `clientOrgId`. The same token is used for **Automated Pipeline** ingest/status/cancel and all other protected routes (`AUTH_MODE=self`)."
+      "description": "**Step 1.** Login is public. Saves `token` and `clientOrgId`. The same token is used for **Automated Pipeline** ingest/status/runs/cancel and all other protected routes (`AUTH_MODE=self`)."
     },
     {
       "name": "Automated Pipeline (Ingest + Status)",
@@ -395,6 +395,88 @@
               ]
             },
             "description": "## Purpose\nMark the org's active (`queued`/`running`) pipeline run as **failed** and release the one-active-run-per-org lock.\n\nUse when a run is stuck (e.g. after a worker crash) or you need to retry ingest without waiting.\n\n## Auth\nSame as **Ingest documents**: `Authorization: Bearer {{token}}` from Login.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"pipeline_run_id\": \"...\",\n    \"status\": \"failed\",\n    \"error\": \"Cancelled by user\"\n  }\n}\n```\n\n## Errors\n404 `NO_ACTIVE_PIPELINE_RUN` — nothing to cancel\n\n## Then\nRun **Ingest documents** again."
+          },
+          "response": []
+        },
+        {
+          "name": "List pipeline runs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json() || {};",
+                  "const d = body.data || {};",
+                  "const summary = d.summary || {};",
+                  "console.log('Pipeline runs summary:', JSON.stringify(summary));",
+                  "const runs = d.runs || [];",
+                  "console.log('Runs on this page:', runs.length);",
+                  "runs.forEach(run => {",
+                  "  const docs = (run.documents || []).map(doc => doc.filename || doc.document_id).join(', ');",
+                  "  console.log('  ', run.pipeline_run_id + ':', run.status, run.current_stage, docs ? '(' + docs + ')' : '');",
+                  "  if (run.queue_position) console.log('    queue position:', run.queue_position);",
+                  "  if (run.duration_seconds != null) console.log('    duration_seconds:', run.duration_seconds);",
+                  "});",
+                  "if (d.pagination && d.pagination.has_more) {",
+                  "  console.log('More runs available — increase offset and re-send.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{stageURL}}/api/v1/pipeline/runs/{{clientOrgId}}?limit=20&offset=0",
+              "host": [
+                "{{stageURL}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "pipeline",
+                "runs",
+                "{{clientOrgId}}"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "Optional filter: queued, waiting, running, completed, or failed.",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Page size (1–100)."
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "description": "Number of runs to skip for pagination."
+                }
+              ]
+            },
+            "description": "## Purpose\nList all pipeline runs for this organisation with aggregate counts and per-run metadata. Use for dashboards showing how many runs are active, queued, waiting, completed, or failed.\n\nFor per-stage detail on a single run, follow each item's `status_url` or use **Pipeline status (specific run)**.\n\n## Auth\nSame as **Ingest documents**: `Authorization: Bearer {{token}}` from Login.\n\n## Query params\n| Param | Default | Description |\n| --- | --- | --- |\n| `status` | — | Optional filter: `queued`, `waiting`, `running`, `completed`, `failed` |\n| `limit` | `20` | Page size (1–100) |\n| `offset` | `0` | Pagination offset |\n\nRuns are ordered newest-first. The `summary` block always reflects **all** runs for the org, regardless of filter/pagination.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"message\": \"Pipeline runs retrieved\",\n  \"data\": {\n    \"client_org_id\": \"...\",\n    \"summary\": {\n      \"total_runs\": 14,\n      \"running\": 1,\n      \"queued\": 0,\n      \"waiting\": 2,\n      \"completed\": 10,\n      \"failed\": 1,\n      \"active_now\": 3\n    },\n    \"pagination\": { \"limit\": 20, \"offset\": 0, \"total\": 14, \"has_more\": false },\n    \"runs\": [\n      {\n        \"pipeline_run_id\": \"uuid\",\n        \"status\": \"completed\",\n        \"current_stage\": \"complete\",\n        \"progress_percent\": 100,\n        \"total_documents\": 1,\n        \"new_documents\": 1,\n        \"skipped_duplicate_documents\": 0,\n        \"processed_documents\": 0,\n        \"failed_documents\": 0,\n        \"documents\": [\n          {\n            \"document_id\": \"...\",\n            \"document_registry_id\": \"...\",\n            \"filename\": \"policy.pdf\"\n          }\n        ],\n        \"celery_task_id\": \"...\",\n        \"queue_position\": null,\n        \"error\": null,\n        \"started_at\": \"...\",\n        \"completed_at\": \"...\",\n        \"created_at\": \"...\",\n        \"duration_seconds\": 425,\n        \"status_url\": \"/api/v1/pipeline/status/{clientOrgId}?pipeline_run_id=uuid\"\n      }\n    ]\n  }\n}\n```\n\n`duration_seconds` is the whole pipeline run wall-clock time (`completed_at - started_at`), not a single stage.\n\n`queue_position` is set only for `waiting` runs (1-based FIFO position behind the active run).\n\n## Errors\n400 `INVALID_PIPELINE_STATUS` · 401/403 (same as ingest) · 404 `CLIENT_ORG_NOT_FOUND`"
           },
           "response": []
         },
@@ -532,7 +614,7 @@
           ]
         }
       ],
-      "description": "**Recommended path — replaces manual Steps 3-10.** One authenticated upload runs the entire workflow (control extraction → issues → classification → charts → risk discovery → scoring with auto-promotion → tagging with auto-apply → owner assignment with auto-apply) end-to-end via Celery/RabbitMQ/Redis.\n\n**Auth:** `Authorization: Bearer {{token}}` from **01 Auth → Login** (default `AUTH_MODE=self`). The token's org must match `{{clientOrgId}}` in the path.\n\n**Quick flow:** Login → Ingest (attach PDF) → Poll status until `completed` → 11 Fetch Latest Data.",
+      "description": "**Recommended path — replaces manual Steps 3-10.** One authenticated upload runs the entire workflow (control extraction → issues → classification → charts → risk discovery → scoring with auto-promotion → tagging with auto-apply → owner assignment with auto-apply) end-to-end via Celery/RabbitMQ/Redis.\n\n**Auth:** `Authorization: Bearer {{token}}` from **01 Auth → Login** (default `AUTH_MODE=self`). The token's org must match `{{clientOrgId}}` in the path.\n\n**Quick flow:** Login → Ingest (attach PDF) → Poll status until `completed` → 11 Fetch Latest Data.\n\n**Dashboard:** Use **List pipeline runs** to see all runs (queued, running, waiting, completed, failed) with document names and timing.",
       "event": [
         {
           "listen": "prerequest",
@@ -3438,7 +3520,7 @@
     {
       "key": "pipelineRunId",
       "value": "",
-      "description": "Set automatically by 'Ingest documents (auto pipeline)'; used by 'Pipeline status (specific run)'."
+      "description": "Set automatically by 'Ingest documents (auto pipeline)'; used by 'Pipeline status (specific run)' and visible in 'List pipeline runs'."
     },
     {
       "key": "samplePdfHint",

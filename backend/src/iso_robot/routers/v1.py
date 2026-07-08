@@ -128,6 +128,7 @@ router.add_api_route("/risks/{client_org_id}", org.list_risks, methods=["GET"], 
 # ── Automated Pipeline — external-backend auth (ingest + status) ───────────────
 router.add_api_route("/ingest/{client_org_id}", pipeline.ingest, methods=["POST"], status_code=202, tags=["pipeline"])
 router.add_api_route("/pipeline/status/{client_org_id}", pipeline.pipeline_status, methods=["GET"], tags=["pipeline"])
+router.add_api_route("/pipeline/runs/{client_org_id}", pipeline.list_pipeline_runs, methods=["GET"], tags=["pipeline"])
 router.add_api_route("/pipeline/cancel/{client_org_id}", pipeline.cancel_pipeline, methods=["POST"], tags=["pipeline"])
 
 # ── Chatbot — Milvus-backed SSE assistant (scoped to the user's org) ───────────

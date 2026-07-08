@@ -219,6 +219,61 @@ async def test_run_mark_completed_and_failed(db_session: AsyncSession, org: dict
     assert fetched_failed["error"] == "boom"
 
 
+async def test_run_list_for_org_orders_newest_first_and_paginates(db_session: AsyncSession, org: dict) -> None:
+    repo = PipelineRunRepository(db_session)
+    first = await repo.create(client_org_id=org["id"], save_to_storage=False, force_reprocess=False)
+    await repo.mark_completed(first["id"])
+    second = await repo.create(client_org_id=org["id"], save_to_storage=False, force_reprocess=False, status="waiting")
+    third = await repo.create(client_org_id=org["id"], save_to_storage=False, force_reprocess=False)
+
+    all_runs = await repo.list_for_org(org["id"], limit=10, offset=0)
+    assert [run["id"] for run in all_runs] == [third["id"], second["id"], first["id"]]
+
+    page = await repo.list_for_org(org["id"], limit=1, offset=1)
+    assert len(page) == 1
+    assert page[0]["id"] == second["id"]
+
+    assert await repo.count_for_org(org["id"]) == 3
+
+
+async def test_run_status_counts_for_org(db_session: AsyncSession, org: dict) -> None:
+    repo = PipelineRunRepository(db_session)
+    completed = await repo.create(client_org_id=org["id"], save_to_storage=False, force_reprocess=False)
+    await repo.mark_completed(completed["id"])
+    await repo.create(client_org_id=org["id"], save_to_storage=False, force_reprocess=False, status="waiting")
+    running = await repo.create(client_org_id=org["id"], save_to_storage=False, force_reprocess=False)
+    await repo.set_stage(running["id"], "extract_controls", status="running")
+    failed = await repo.create(client_org_id=org["id"], save_to_storage=False, force_reprocess=False)
+    await repo.mark_failed(failed["id"], "boom")
+
+    counts = await repo.status_counts_for_org(org["id"])
+    assert counts["completed"] == 1
+    assert counts["waiting"] == 1
+    assert counts["running"] == 1
+    assert counts["failed"] == 1
+
+    filtered = await repo.list_for_org(org["id"], status="waiting")
+    assert len(filtered) == 1
+    assert filtered[0]["status"] == "waiting"
+    assert await repo.count_for_org(org["id"], status="waiting") == 1
+
+
+async def test_run_queue_position_for_waiting_runs(db_session: AsyncSession, org: dict) -> None:
+    repo = PipelineRunRepository(db_session)
+    first_waiting = await repo.create(
+        client_org_id=org["id"], save_to_storage=False, force_reprocess=False, status="waiting"
+    )
+    second_waiting = await repo.create(
+        client_org_id=org["id"], save_to_storage=False, force_reprocess=False, status="waiting"
+    )
+    completed = await repo.create(client_org_id=org["id"], save_to_storage=False, force_reprocess=False)
+    await repo.mark_completed(completed["id"])
+
+    assert await repo.queue_position(org["id"], first_waiting["id"]) == 1
+    assert await repo.queue_position(org["id"], second_waiting["id"]) == 2
+    assert await repo.queue_position(org["id"], completed["id"]) is None
+
+
 # ── PipelineStepRepository ────────────────────────────────────────────────────
 
 

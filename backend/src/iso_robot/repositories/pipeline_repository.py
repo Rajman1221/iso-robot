@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.models import DocumentRegistry, PipelineDocumentStep, PipelineRun
@@ -128,6 +128,54 @@ class PipelineRunRepository:
         )
         obj = (await self._session.execute(stmt)).scalars().first()
         return to_dict(obj) if obj else None
+
+    def _org_filter(self, client_org_id: str, *, status: Optional[str] = None):
+        clauses = [PipelineRun.client_org_id == client_org_id]
+        if status is not None:
+            clauses.append(PipelineRun.status == status)
+        return clauses
+
+    async def list_for_org(
+        self,
+        client_org_id: str,
+        *,
+        status: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        stmt = (
+            select(PipelineRun)
+            .where(*self._org_filter(client_org_id, status=status))
+            .order_by(PipelineRun.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]
+
+    async def count_for_org(self, client_org_id: str, *, status: Optional[str] = None) -> int:
+        stmt = select(func.count()).select_from(PipelineRun).where(*self._org_filter(client_org_id, status=status))
+        return int((await self._session.execute(stmt)).scalar_one())
+
+    async def status_counts_for_org(self, client_org_id: str) -> dict[str, int]:
+        stmt = (
+            select(PipelineRun.status, func.count())
+            .where(PipelineRun.client_org_id == client_org_id)
+            .group_by(PipelineRun.status)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return {str(status): int(count) for status, count in rows}
+
+    async def queue_position(self, client_org_id: str, run_id: str) -> Optional[int]:
+        stmt = (
+            select(PipelineRun.id)
+            .where(PipelineRun.client_org_id == client_org_id, PipelineRun.status == "waiting")
+            .order_by(PipelineRun.created_at.asc())
+        )
+        waiting_ids = [str(row_id) for row_id in (await self._session.execute(stmt)).scalars().all()]
+        if run_id not in waiting_ids:
+            return None
+        return waiting_ids.index(run_id) + 1
 
     async def has_active_run(self, client_org_id: str) -> Optional[dict[str, Any]]:
         stmt = select(PipelineRun).where(

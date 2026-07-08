@@ -8,8 +8,10 @@ The automated pipeline is the **only** way to run control extraction, issue
 synthesis, classification, chart generation, risk discovery, risk scoring,
 risk tagging, and risk owner assignment — the equivalent per-stage manual
 endpoints have been removed.
-Clients call **one ingest endpoint** to begin processing and **one status
-endpoint** to track progress. All intermediate stages run as Celery tasks
+Clients call **one ingest endpoint** to begin processing, **one status
+endpoint** to track a single run in detail, and **one list endpoint** to see
+all runs (queued, running, completed, failed) for an organisation. All
+intermediate stages run as Celery tasks
 behind RabbitMQ, with Redis as the result backend.
 
 Process narrative: [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline).
@@ -23,7 +25,8 @@ of the API — see [Authentication](#authentication) below.
 
 ## Authentication
 
-`POST /ingest/{clientOrgId}` and `GET /pipeline/status/{clientOrgId}` are
+`POST /ingest/{clientOrgId}`, `GET /pipeline/status/{clientOrgId}`, and
+`GET /pipeline/runs/{clientOrgId}` are
 authenticated against an **external backend**, not ISO Robot's own JWT.
 
 | Header | Value |
@@ -280,6 +283,119 @@ The response does **not** include elapsed-time or ETA fields — poll `status`,
 | 403 | `FORBIDDEN` | `X-Org-Id` does not match `clientOrgId` |
 | 404 | `CLIENT_ORG_NOT_FOUND` | Unknown organisation |
 | 404 | `PIPELINE_RUN_NOT_FOUND` | No run exists for the org yet, or `pipeline_run_id` doesn't belong to it |
+
+---
+
+## List pipeline runs
+
+```http
+GET /pipeline/runs/{clientOrgId}
+```
+
+**Auth:** external-backend verify · **Response:** `200`
+
+Returns a paginated list of pipeline runs for the organisation, plus aggregate
+counts across all statuses. Use this for dashboards showing how many runs are
+active, queued, waiting, completed, or failed. For per-stage detail on a single
+run, follow each item's `status_url` to `GET /pipeline/status`.
+
+### Path parameters
+
+| Param | Description |
+| --- | --- |
+| `clientOrgId` | Organisation UUID |
+
+### Query parameters
+
+| Param | Type | Default | Description |
+| --- | --- | --- | --- |
+| `status` | string | — | Optional filter: `queued`, `waiting`, `running`, `completed`, or `failed` |
+| `limit` | integer | `20` | Page size (1–100) |
+| `offset` | integer | `0` | Number of runs to skip |
+
+Runs are ordered by `created_at` descending (newest first). The `summary`
+block always reflects **all** runs for the org, regardless of the `status`
+filter or pagination.
+
+### Example (curl)
+
+```bash
+curl "http://157.20.190.175:8000/api/v1/pipeline/runs/{clientOrgId}?limit=20&offset=0" \
+  -H "Authorization: Bearer $EXISTING_BACKEND_TOKEN" \
+  -H "X-User-Id: $USER_ID" \
+  -H "X-User-Email: user@example.com" \
+  -H "X-Org-Id: {clientOrgId}"
+```
+
+### Response `200`
+
+```json
+{
+  "status": "success",
+  "message": "Pipeline runs retrieved",
+  "data": {
+    "client_org_id": "686f6c71-0000-4000-8000-000000000001",
+    "summary": {
+      "total_runs": 14,
+      "running": 1,
+      "queued": 0,
+      "waiting": 2,
+      "completed": 10,
+      "failed": 1,
+      "active_now": 3
+    },
+    "pagination": { "limit": 20, "offset": 0, "total": 14, "has_more": false },
+    "runs": [
+      {
+        "pipeline_run_id": "550e8400-e29b-41d4-a716-446655440000",
+        "status": "completed",
+        "current_stage": "complete",
+        "progress_percent": 100,
+        "total_documents": 1,
+        "new_documents": 1,
+        "skipped_duplicate_documents": 0,
+        "processed_documents": 0,
+        "failed_documents": 0,
+        "documents": [
+          {
+            "document_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567891",
+            "document_registry_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "filename": "policy.pdf"
+          }
+        ],
+        "celery_task_id": "6b1f1e6a-8f1a-4a9e-9c2e-4f6f7a1b2c3d",
+        "queue_position": null,
+        "error": null,
+        "started_at": "2026-06-30T10:00:00Z",
+        "completed_at": "2026-06-30T10:07:05Z",
+        "created_at": "2026-06-30T09:59:58Z",
+        "duration_seconds": 425,
+        "status_url": "/api/v1/pipeline/status/686f6c71-0000-4000-8000-000000000001?pipeline_run_id=550e8400-e29b-41d4-a716-446655440000"
+      }
+    ]
+  }
+}
+```
+
+`duration_seconds` is the **whole pipeline run** wall-clock time
+(`completed_at - started_at`), not a single stage. It is `null` while a run is
+still in progress.
+
+`queue_position` is set only for `waiting` runs — its 1-based position in the
+org's FIFO queue behind the currently active run.
+
+`documents[]` lists the new/reprocessed documents registered for that run
+(from the `ingest_register` step). It does not include duplicates skipped at
+ingest time.
+
+### Errors
+
+| HTTP | code | Meaning |
+| --- | --- | --- |
+| 400 | `INVALID_PIPELINE_STATUS` | Unknown `status` filter value |
+| 401 | `UNAUTHORIZED` / `SESSION_INVALID` | Missing or invalid token/headers |
+| 403 | `FORBIDDEN` | `X-Org-Id` does not match `clientOrgId` |
+| 404 | `CLIENT_ORG_NOT_FOUND` | Unknown organisation |
 
 ---
 

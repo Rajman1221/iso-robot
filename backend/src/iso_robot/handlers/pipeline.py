@@ -6,6 +6,8 @@
   risk discovery -> scoring -> tagging) to completion.
 - `GET /pipeline/status/{client_org_id}` — poll the latest (or a specific)
   run's progress, including per-document/per-stage detail.
+- `GET /pipeline/runs/{client_org_id}` — list all runs for the org with summary
+  counts, document metadata, and timing.
 - `POST /pipeline/cancel/{client_org_id}` — cancel the org's active run and
   release the one-active-run-per-org lock.
 
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, List, Optional
 
@@ -38,6 +41,7 @@ from iso_robot.errors import APIError
 from iso_robot.handlers.pipeline_auth import authenticate_pipeline_request
 from iso_robot.helpers.org_paths import org_base_dir
 from iso_robot.helpers.verify_cache import VerifiedContext
+from iso_robot.models.pipeline import RUN_STATUSES
 from iso_robot.observability.pipeline_progress import (
     progress_percent,
     stage_summary,
@@ -364,6 +368,135 @@ async def ingest(
 
 def _progress_percent(status: str, current_stage: str) -> int:
     return progress_percent(status, current_stage)
+
+
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        normalized = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).astimezone(timezone.utc)
+    return None
+
+
+def _duration_seconds(started_at: Any, completed_at: Any) -> Optional[int]:
+    start = _parse_timestamp(started_at)
+    end = _parse_timestamp(completed_at)
+    if start is None or end is None:
+        return None
+    return max(0, int((end - start).total_seconds()))
+
+
+def _build_runs_summary(status_counts: dict[str, int]) -> dict[str, int]:
+    running = status_counts.get("running", 0)
+    queued = status_counts.get("queued", 0)
+    waiting = status_counts.get("waiting", 0)
+    completed = status_counts.get("completed", 0)
+    failed = status_counts.get("failed", 0)
+    return {
+        "total_runs": sum(status_counts.values()),
+        "running": running,
+        "queued": queued,
+        "waiting": waiting,
+        "completed": completed,
+        "failed": failed,
+        "active_now": running + queued + waiting,
+    }
+
+
+async def _documents_for_run(step_repo: PipelineStepRepository, run_id: str) -> list[dict[str, Any]]:
+    row = await step_repo.get_run_level(run_id, "ingest_register")
+    documents = (row or {}).get("result_json", {}).get("documents") or []
+    return [
+        {
+            "document_id": doc.get("document_id"),
+            "document_registry_id": doc.get("document_registry_id"),
+            "filename": doc.get("filename"),
+        }
+        for doc in documents
+        if isinstance(doc, dict)
+    ]
+
+
+async def list_pipeline_runs(
+    client_org_id: str,
+    verified: Annotated[VerifiedContext, Depends(authenticate_pipeline_request)],
+    org_repo: Annotated[OrgRepository, Depends(get_org_repo)],
+    run_repo: Annotated[PipelineRunRepository, Depends(get_pipeline_run_repo)],
+    step_repo: Annotated[PipelineStepRepository, Depends(get_pipeline_step_repo)],
+    status: Annotated[
+        Optional[str],
+        Query(description="Filter by run status: queued, waiting, running, completed, or failed."),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=100, description="Maximum number of runs to return.")] = 20,
+    offset: Annotated[int, Query(ge=0, description="Number of runs to skip for pagination.")] = 0,
+) -> ApiResponse:
+    """GET /pipeline/runs/{client_org_id} — list pipeline runs for an organisation."""
+    org = await org_repo.get_by_id(client_org_id)
+    if not org:
+        raise APIError("Organisation not found", code="CLIENT_ORG_NOT_FOUND", status_code=404)
+
+    if status is not None and status not in RUN_STATUSES:
+        raise APIError(
+            f"Invalid status filter. Must be one of: {', '.join(RUN_STATUSES)}",
+            code="INVALID_PIPELINE_STATUS",
+            status_code=400,
+        )
+
+    status_counts = await run_repo.status_counts_for_org(client_org_id)
+    summary = _build_runs_summary(status_counts)
+    total = await run_repo.count_for_org(client_org_id, status=status)
+    runs = await run_repo.list_for_org(client_org_id, status=status, limit=limit, offset=offset)
+
+    run_items: list[dict[str, Any]] = []
+    for run in runs:
+        run_id = run["id"]
+        run_status = run["status"]
+        queue_position = (
+            await run_repo.queue_position(client_org_id, run_id) if run_status == "waiting" else None
+        )
+        run_items.append(
+            {
+                "pipeline_run_id": run_id,
+                "status": run_status,
+                "current_stage": run["current_stage"],
+                "progress_percent": _progress_percent(run_status, run["current_stage"]),
+                "total_documents": run["total_documents"],
+                "new_documents": run["new_documents"],
+                "skipped_duplicate_documents": run["skipped_duplicate_documents"],
+                "processed_documents": run["processed_documents"],
+                "failed_documents": run["failed_documents"],
+                "documents": await _documents_for_run(step_repo, run_id),
+                "celery_task_id": run.get("celery_root_task_id"),
+                "queue_position": queue_position,
+                "error": run.get("error"),
+                "started_at": run.get("started_at"),
+                "completed_at": run.get("completed_at"),
+                "created_at": run["created_at"],
+                "duration_seconds": _duration_seconds(run.get("started_at"), run.get("completed_at")),
+                "status_url": f"/api/v1/pipeline/status/{client_org_id}?pipeline_run_id={run_id}",
+            }
+        )
+
+    return ApiResponse(
+        status="success",
+        message="Pipeline runs retrieved",
+        data={
+            "client_org_id": client_org_id,
+            "summary": summary,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total,
+                "has_more": offset + len(run_items) < total,
+            },
+            "runs": run_items,
+        },
+    )
 
 
 async def pipeline_status(

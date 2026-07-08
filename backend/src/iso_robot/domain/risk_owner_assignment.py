@@ -287,7 +287,7 @@ async def run_risk_owner_assignment_job(
     *,
     job_id: str,
 ) -> dict[str, Any]:
-    _ = settings
+    commit_every = max(1, settings.progress_update_every)
     client_org_id = str(payload.get("client_org_id") or "")
     risk_ids = payload.get("risk_ids")
     only_unassigned = bool(payload.get("only_unassigned", True))
@@ -391,7 +391,8 @@ async def run_risk_owner_assignment_job(
             progress["risks_processed"] += 1
             progress["no_owner_found"] += 1
             progress["needs_review"] += 1
-            await jobs.merge_payload(job_id, {"progress": progress})
+            if progress["risks_processed"] % commit_every == 0:
+                await jobs.merge_payload(job_id, {"progress": progress})
             continue
 
         status = "needs_review" if confidence < review_below else "proposed"
@@ -436,6 +437,9 @@ async def run_risk_owner_assignment_job(
             progress["owners_proposed"] += 1
         else:
             progress["needs_review"] += 1
-        await jobs.merge_payload(job_id, {"progress": progress})
+        if progress["risks_processed"] % commit_every == 0:
+            await jobs.merge_payload(job_id, {"progress": progress})
 
+    # Final progress write so the last partial batch is always persisted.
+    await jobs.merge_payload(job_id, {"progress": progress})
     return progress

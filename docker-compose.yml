@@ -15,10 +15,12 @@ x-pipeline-worker: &pipeline-worker
     OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-iso-robot-api}
     METRICS_PORT: ${METRICS_PORT:-9808}
     PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
-    # Empty DB_URI falls back to the SQLite file above. Point it at Postgres for
-    # real worker concurrency, e.g.:
-    #   postgresql+asyncpg://iso_robot:iso_robot@postgres:5432/iso_robot
-    DB_URI: ${DB_URI:-}
+    # Inside compose the app always uses the bundled `postgres` service. This
+    # literal intentionally overrides any host-oriented DB_URI in .env (which
+    # points at localhost for host-based dev).
+    DB_URI: postgresql+asyncpg://iso_robot:iso_robot@postgres:5432/iso_robot
+    DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+    DB_POOL_MAX_OVERFLOW: ${DB_POOL_MAX_OVERFLOW:-5}
     CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://iso_robot:iso_robot@rabbitmq:5672//}
     CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
     MILVUS_URI: ${MILVUS_URI:-http://milvus-standalone:19530}
@@ -32,6 +34,8 @@ x-pipeline-worker: &pipeline-worker
     - "./ISO ROBOT RISK POC.xlsx:/app/ISO ROBOT RISK POC.xlsx:ro"
     - prometheus_multiproc:/tmp/prometheus_multiproc
   depends_on:
+    postgres:
+      condition: service_healthy
     rabbitmq:
       condition: service_healthy
     redis:
@@ -49,6 +53,8 @@ services:
       # Set to "true" on first boot to create demo orgs/users (idempotent).
       RUN_SEED_DEMO: ${RUN_SEED_DEMO:-false}
     depends_on:
+      postgres:
+        condition: service_healthy
       milvus-standalone:
         condition: service_started
       rabbitmq:
@@ -64,28 +70,28 @@ services:
   worker-orchestrator:
     <<: *pipeline-worker
     container_name: iso-robot-worker-orchestrator
-    command: celery -A iso_robot.celery_app worker -Q pipeline.orchestrator -c 4 -E --loglevel=INFO -n orchestrator@%h
+    command: celery -A iso_robot.celery_app worker -Q pipeline.orchestrator -c ${WORKER_ORCHESTRATOR_CONCURRENCY:-4} -E --loglevel=INFO -n orchestrator@%h
     ports:
       - "${WORKER_ORCHESTRATOR_METRICS_PORT:-9810}:9808"
 
   worker-extract:
     <<: *pipeline-worker
     container_name: iso-robot-worker-extract
-    command: celery -A iso_robot.celery_app worker -Q pipeline.extract -c 4 -E --loglevel=INFO -n extract@%h
+    command: celery -A iso_robot.celery_app worker -Q pipeline.extract -c ${WORKER_EXTRACT_CONCURRENCY:-4} -E --loglevel=INFO -n extract@%h
     ports:
       - "${WORKER_EXTRACT_METRICS_PORT:-9811}:9808"
 
   worker-llm:
     <<: *pipeline-worker
     container_name: iso-robot-worker-llm
-    command: celery -A iso_robot.celery_app worker -Q pipeline.llm -c 4 -E --loglevel=INFO -n llm@%h
+    command: celery -A iso_robot.celery_app worker -Q pipeline.llm -c ${WORKER_LLM_CONCURRENCY:-8} -E --loglevel=INFO -n llm@%h
     ports:
       - "${WORKER_LLM_METRICS_PORT:-9812}:9808"
 
   worker-scoring:
     <<: *pipeline-worker
     container_name: iso-robot-worker-scoring
-    command: celery -A iso_robot.celery_app worker -Q pipeline.scoring -c 2 -E --loglevel=INFO -n scoring@%h
+    command: celery -A iso_robot.celery_app worker -Q pipeline.scoring -c ${WORKER_SCORING_CONCURRENCY:-4} -E --loglevel=INFO -n scoring@%h
     ports:
       - "${WORKER_SCORING_METRICS_PORT:-9813}:9808"
 

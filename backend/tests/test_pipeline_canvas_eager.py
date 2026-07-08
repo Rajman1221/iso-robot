@@ -59,7 +59,14 @@ def _list_steps(run_id: str) -> list[dict]:
 @pytest.fixture(autouse=True)
 def _stub_domain_functions(monkeypatch: pytest.MonkeyPatch):
     """Replace every AI/domain call the stage tasks make with a deterministic
-    async stand-in, so the canvas exercises only orchestration + bookkeeping."""
+    async stand-in, so the canvas exercises only orchestration + bookkeeping.
+
+    This file validates the LEGACY v1 chain (per-document steps), so it pins
+    pipeline_v2_enabled=False; the batched v2 machine is covered separately by
+    test_pipeline_v2_eager.py."""
+    from iso_robot.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "pipeline_v2_enabled", False)
 
     async def fake_extract_controls_job(settings, session, payload) -> None:
         return None
@@ -70,10 +77,10 @@ def _stub_domain_functions(monkeypatch: pytest.MonkeyPatch):
     async def fake_classify_issues_job(settings, session, issue_ids) -> int:
         return 0
 
-    async def fake_aggregate_classifications(session) -> dict:
+    async def fake_aggregate_classifications(session, *, client_org_id=None) -> dict:
         return {"pestel": {}, "swot": {}}
 
-    async def fake_run_risk_discovery(settings, session) -> dict:
+    async def fake_run_risk_discovery(settings, session, client_org_id=None) -> dict:
         return {"candidates_found": 0}
 
     async def fake_score_risks_job(settings, session, issue_ids, job_id, *, client_org_id) -> list:

@@ -67,7 +67,21 @@ def build_pipeline_canvas(run_id: str, documents: List[dict[str, Any]]) -> Signa
 
 
 def enqueue_pipeline(run_id: str, documents: List[dict[str, Any]]) -> str:
-    """Dispatch the canvas and return the root Celery task id."""
+    """Dispatch the pipeline for a run and return the root Celery task id.
+
+    Uses the batched v2 state machine when ``pipeline_v2_enabled`` (default), and
+    the legacy monolithic chain otherwise (a one-flag rollback lever).
+    """
+    from iso_robot.config import get_settings
+
+    if get_settings().pipeline_v2_enabled:
+        from iso_robot.pipeline import tasks_v2
+
+        async_result = tasks_v2.pipeline_v2_start.apply_async(
+            args=[run_id, documents], queue="pipeline.orchestrator"
+        )
+        return async_result.id
+
     canvas = build_pipeline_canvas(run_id, documents)
     async_result = canvas.apply_async()
     return async_result.id

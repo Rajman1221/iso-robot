@@ -175,7 +175,35 @@ async def test_ingest_duplicate_document_is_skipped(client: TestClient, db_sessi
 
 
 @pytest.mark.asyncio
-async def test_ingest_conflicts_while_run_active(client: TestClient, db_session) -> None:
+async def test_ingest_queues_run_while_active(client: TestClient, db_session) -> None:
+    """With run queuing on (the default), a second upload while a run is active is
+    accepted as a `waiting` run instead of being rejected with 409."""
+    org = await _create_org(db_session)
+    first = client.post(
+        f"/api/v1/ingest/{org['id']}",
+        headers=_headers(org["id"]),
+        files={"file": ("a.pdf", io.BytesIO(_pdf_bytes("active-1")), "application/pdf")},
+        data={"save_to_storage": "false"},
+    )
+    assert first.status_code == 202
+
+    second = client.post(
+        f"/api/v1/ingest/{org['id']}",
+        headers=_headers(org["id"]),
+        files={"file": ("b.pdf", io.BytesIO(_pdf_bytes("active-2")), "application/pdf")},
+        data={"save_to_storage": "false"},
+    )
+    assert second.status_code == 202
+    assert second.json()["data"]["status"] == "waiting"
+
+
+async def test_ingest_conflicts_when_queue_disabled(
+    client: TestClient, db_session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PIPELINE_MAX_QUEUED_RUNS=0 restores the legacy 409-on-concurrent-upload behavior."""
+    from iso_robot.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "pipeline_max_queued_runs", 0)
     org = await _create_org(db_session)
     first = client.post(
         f"/api/v1/ingest/{org['id']}",

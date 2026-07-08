@@ -197,12 +197,12 @@ class Settings(BaseSettings):
         description="Run Celery tasks synchronously in-process. Used by tests; never true in production.",
     )
     celery_task_soft_time_limit_seconds: int = Field(
-        default=7200,
-        description="Celery soft time limit (seconds) for pipeline tasks. LLM stages like "
-                    "classify_issues can run for hours on large documents.",
+        default=1500,
+        description="Celery soft time limit (seconds) for pipeline tasks. With stages now batched "
+                    "and internally concurrent, no single task should approach this.",
     )
     celery_task_time_limit_seconds: int = Field(
-        default=7500,
+        default=1800,
         description="Celery hard time limit (seconds). Must exceed celery_task_soft_time_limit_seconds.",
     )
     pipeline_ingest_temp_dir: str = Field(
@@ -285,6 +285,104 @@ class Settings(BaseSettings):
     control_extraction_min_local_chars: int = Field(
         default=5000,
         description="Prefer local PDF text over slow DI page-batching when at least this many characters are extractable locally.",
+    )
+
+    # ── Pipeline v2: batching, concurrency, retry/DLQ ───────────────────────────
+    # The pipeline fans work out across Celery workers (one batch task per queue
+    # slot) AND runs bounded-concurrent LLM/embedding calls inside each task. The
+    # two multiply: effective parallelism ≈ worker slots × the per-task limit.
+    # LLM calls are network I/O, so asyncio concurrency (not threads) is the right
+    # tool — the GIL is irrelevant while awaiting a socket.
+    pipeline_v2_enabled: bool = Field(
+        default=True,
+        description="Use the batched dispatcher/state-machine canvas. False falls back to the "
+                    "legacy monolithic chain (rollback lever).",
+    )
+
+    # LLM request hardening (applies to every chat_json_object call).
+    llm_request_timeout_seconds: float = Field(
+        default=120.0, description="Per-attempt timeout for a single LLM chat call."
+    )
+    llm_retry_attempts: int = Field(
+        default=4, description="Total attempts (incl. first) for a transient-failing LLM call."
+    )
+    llm_retry_base_delay_seconds: float = Field(
+        default=1.0, description="Base delay for exponential backoff with full jitter (capped at 30s)."
+    )
+    llm_price_per_1k_prompt_usd: float = Field(
+        default=0.0, description="Prompt-token price per 1K for the llm_cost metric. 0 disables cost tracking."
+    )
+    llm_price_per_1k_completion_usd: float = Field(
+        default=0.0, description="Completion-token price per 1K for the llm_cost metric. 0 disables cost tracking."
+    )
+
+    # Bulk indexing / embeddings.
+    embedding_max_batch: int = Field(
+        default=128, description="Max chunks sent to Azure OpenAI embeddings in one bulk-index call."
+    )
+
+    # Per-stage batch sizes (items per Celery batch task) and intra-task concurrency.
+    extract_segment_concurrency: int = Field(
+        default=3, description="Concurrent per-segment LLM extraction calls within one document."
+    )
+    di_batch_concurrency: int = Field(
+        default=2, description="Concurrent Azure Document Intelligence page-batch analyses per document."
+    )
+    azure_di_timeout_seconds: float = Field(
+        default=300.0, description="Timeout for a single Document Intelligence poller.result() call."
+    )
+    issues_controls_batch_size: int = Field(
+        default=22, description="Controls per issues-from-controls batch (one LLM call per batch)."
+    )
+    issues_generation_scope: str = Field(
+        default="new_controls",
+        description="'new_controls' (incremental: only this run's controls, never delete existing "
+                    "issues) or 'all_controls_replace' (legacy: wipe + re-derive from all org controls).",
+    )
+    issues_stage_concurrency: int = Field(
+        default=4, description="Concurrent issue batches in the legacy (non-Celery-fanout) job path."
+    )
+    classify_batch_size: int = Field(
+        default=10, description="Issues per classification batch task."
+    )
+    classify_llm_concurrency: int = Field(
+        default=4, description="Concurrent per-issue classification LLM calls within one batch task."
+    )
+    classify_multi_issue_batch_size: int = Field(
+        default=0,
+        description="Experimental: >0 classifies N issues in a single LLM call. 0 keeps the "
+                    "quality-safe one-call-per-issue default.",
+    )
+    scoring_batch_size: int = Field(
+        default=20, description="Issues per risk-scoring batch task."
+    )
+    scoring_llm_concurrency: int = Field(
+        default=5, description="Concurrent per-issue scoring LLM calls within one batch task."
+    )
+    tagging_batch_size: int = Field(
+        default=5, description="Risks per risk-tagging batch task."
+    )
+    tagging_llm_concurrency: int = Field(
+        default=5, description="Concurrent per-risk tag-refinement LLM calls within one batch task."
+    )
+    discovery_llm_concurrency: int = Field(
+        default=2, description="Concurrent candidate/library-match LLM calls in risk discovery."
+    )
+    celery_batch_max_retries: int = Field(
+        default=3, description="Transient-failure retry ceiling for pipeline batch tasks."
+    )
+    progress_update_every: int = Field(
+        default=10, description="Commit job/run progress every N items (instead of per item)."
+    )
+    pipeline_max_queued_runs: int = Field(
+        default=10,
+        description="Max runs that may wait per org while one is active (auto-started FIFO on "
+                    "completion). 0 restores the old 'reject concurrent upload with 409' behavior.",
+    )
+    legacy_jobs_via_celery: bool = Field(
+        default=True,
+        description="Route heavy legacy /jobs work through Celery instead of in-process "
+                    "BackgroundTasks (keeps the API event loop free).",
     )
 
     def resolved_database_path(self) -> Path:

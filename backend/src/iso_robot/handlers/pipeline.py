@@ -22,10 +22,12 @@ from pathlib import Path
 from typing import Annotated, Any, List, Optional
 
 from fastapi import Depends, File, Form, Query, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.deps import (
     get_app_settings,
+    get_db,
     get_document_registry_repo,
     get_document_repo,
     get_org_repo,
@@ -54,6 +56,9 @@ from iso_robot.schemas.api import ApiResponse
 _ALLOWED_INGEST_SUFFIXES = {".pdf"}
 
 
+_HASH_CHUNK_BYTES = 1024 * 1024  # 1 MiB
+
+
 def _unique_dest(folder: Path, filename: str, reserved: set[str]) -> Path:
     base = Path(filename or "upload").name
     stem, suffix = Path(base).stem, Path(base).suffix
@@ -66,9 +71,32 @@ def _unique_dest(folder: Path, filename: str, reserved: set[str]) -> Path:
     return folder / candidate
 
 
+async def _stream_upload_to_temp(upload: UploadFile, dest_root: Path) -> tuple[Path, str, int]:
+    """Stream an upload to a temp `.part` file, hashing as we go.
+
+    Keeps peak memory at one chunk per file instead of the whole document, so a
+    100×50 MB batch no longer needs gigabytes of RAM. Returns (temp_path, sha256,
+    size_bytes); the caller renames or deletes the temp file after dedup.
+    """
+    hasher = hashlib.sha256()
+    size = 0
+    temp_path = dest_root / f".{uuid.uuid4().hex}.part"
+    with temp_path.open("wb") as fh:
+        while True:
+            chunk = await upload.read(_HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            hasher.update(chunk)
+            fh.write(chunk)
+            size += len(chunk)
+    return temp_path, hasher.hexdigest(), size
+
+
 async def _register_document(
     *,
-    content: bytes,
+    temp_path: Path,
+    sha256: str,
+    size_bytes: int,
     filename: str,
     content_type: Optional[str],
     client_org_id: str,
@@ -78,13 +106,16 @@ async def _register_document(
     reserved_names: set[str],
     doc_repo: DocumentRepository,
     registry_repo: DocumentRegistryRepository,
+    session: AsyncSession,
     force_reprocess: bool,
 ) -> dict[str, Any]:
-    """Hash + dedup one upload. Returns an `IngestDocumentResult`-shaped dict."""
-    sha256 = hashlib.sha256(content).hexdigest()
+    """Dedup one already-hashed upload. Consumes ``temp_path`` (renames it into
+    place for new docs, deletes it for duplicates). Returns an
+    ``IngestDocumentResult``-shaped dict."""
     existing_registry = await registry_repo.find(client_org_id, sha256)
 
     if existing_registry and not force_reprocess:
+        temp_path.unlink(missing_ok=True)
         return {
             "filename": filename,
             "sha256": sha256,
@@ -95,27 +126,28 @@ async def _register_document(
             "_new": False,
         }
 
-    reuse_path: Optional[Path] = None
     existing_storage = (existing_registry or {}).get("storage_path")
     if existing_storage and Path(existing_storage).is_file():
-        reuse_path = Path(existing_storage)
-
-    if reuse_path is not None:
-        dest = reuse_path
+        # Reuse the previously-stored file; the freshly-streamed copy is redundant.
+        temp_path.unlink(missing_ok=True)
+        dest = Path(existing_storage)
     else:
         dest = _unique_dest(dest_root, filename, reserved_names)
-        dest.write_bytes(content)
+        temp_path.replace(dest)
 
+    # One transaction per document: document row + registry row + link commit
+    # together (or roll back together), instead of ~3 separate commits.
     document_id, _ = await doc_repo.upsert_by_sha256(
         doc_id=str(uuid.uuid4()),
         filename=filename,
         path=str(dest),
         sha256=sha256,
         mime_type=content_type,
-        size_bytes=len(content),
+        size_bytes=size_bytes,
         framework=None,
         status="ready",
         source_url=None,
+        commit=False,
     )
 
     registry_row, is_new = await registry_repo.upsert(
@@ -123,12 +155,14 @@ async def _register_document(
         sha256=sha256,
         original_filename=filename,
         mime_type=content_type,
-        size_bytes=len(content),
+        size_bytes=size_bytes,
         storage_path=str(dest) if effective_save else None,
         saved_to_storage=effective_save,
         run_id=run_id,
+        commit=False,
     )
-    await registry_repo.set_document_id(registry_row["id"], document_id)
+    await registry_repo.set_document_id(registry_row["id"], document_id, commit=False)
+    await session.commit()
 
     return {
         "filename": filename,
@@ -148,6 +182,8 @@ async def ingest(
     doc_repo: Annotated[DocumentRepository, Depends(get_document_repo)],
     registry_repo: Annotated[DocumentRegistryRepository, Depends(get_document_registry_repo)],
     run_repo: Annotated[PipelineRunRepository, Depends(get_pipeline_run_repo)],
+    step_repo: Annotated[PipelineStepRepository, Depends(get_pipeline_step_repo)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_app_settings)],
     file: Annotated[
         List[UploadFile],
@@ -168,14 +204,27 @@ async def ingest(
     if not org:
         raise APIError("Organisation not found", code="CLIENT_ORG_NOT_FOUND", status_code=404)
 
+    # Run queuing: if the org already has an active run, accept this upload as a
+    # `waiting` run that auto-starts when the active one finishes (instead of 409).
+    # PIPELINE_MAX_QUEUED_RUNS=0 restores the old reject-with-409 behavior.
     active = await run_repo.has_active_run(client_org_id)
+    queue_this_run = False
     if active:
-        raise APIError(
-            f"A pipeline run ({active['id']}) is already in progress for this organisation. "
-            "Poll GET /pipeline/status until it completes before starting another.",
-            code="PIPELINE_RUN_IN_PROGRESS",
-            status_code=409,
-        )
+        if settings.pipeline_max_queued_runs <= 0:
+            raise APIError(
+                f"A pipeline run ({active['id']}) is already in progress for this organisation. "
+                "Poll GET /pipeline/status until it completes before starting another.",
+                code="PIPELINE_RUN_IN_PROGRESS",
+                status_code=409,
+            )
+        if await run_repo.count_waiting(client_org_id) >= settings.pipeline_max_queued_runs:
+            raise APIError(
+                f"Too many pipeline runs are already queued for this organisation "
+                f"(limit {settings.pipeline_max_queued_runs}). Try again once some complete.",
+                code="PIPELINE_QUEUE_FULL",
+                status_code=429,
+            )
+        queue_this_run = True
 
     effective_save = settings.pipeline_save_to_storage_default if save_to_storage is None else save_to_storage
 
@@ -184,6 +233,7 @@ async def ingest(
         save_to_storage=effective_save,
         force_reprocess=force_reprocess,
         requested_by=verified.user_id,
+        status="waiting" if queue_this_run else "queued",
     )
     run_id = run["id"]
 
@@ -215,8 +265,9 @@ async def ingest(
             )
             continue
 
-        content = await upload.read()
-        if not content:
+        temp_path, sha256, size_bytes = await _stream_upload_to_temp(upload, dest_root)
+        if size_bytes == 0:
+            temp_path.unlink(missing_ok=True)
             documents.append(
                 {
                     "filename": filename,
@@ -230,7 +281,9 @@ async def ingest(
             continue
 
         result = await _register_document(
-            content=content,
+            temp_path=temp_path,
+            sha256=sha256,
+            size_bytes=size_bytes,
             filename=filename,
             content_type=upload.content_type,
             client_org_id=client_org_id,
@@ -240,6 +293,7 @@ async def ingest(
             reserved_names=reserved_names,
             doc_repo=doc_repo,
             registry_repo=registry_repo,
+            session=db,
             force_reprocess=force_reprocess,
         )
         is_new = result.pop("_new")
@@ -261,8 +315,29 @@ async def ingest(
         run_id, total_documents=total, new_documents=new_count, skipped_duplicate_documents=skipped_count
     )
 
-    task_id = enqueue_pipeline(run_id, new_documents)
-    await run_repo.set_celery_root_task_id(run_id, task_id)
+    if queue_this_run:
+        # Don't dispatch now. Persist the documents on an ingest_register step so
+        # the state machine can auto-start this run when the active one finishes.
+        await step_repo.create(
+            pipeline_run_id=run_id,
+            stage="ingest_register",
+            status="pending",
+            result={"documents": new_documents, "registered": True},
+        )
+        task_id = None
+        run_status = "waiting"
+        message = (
+            f"Pipeline run queued behind an active run: {new_count} new/reprocessed "
+            f"document(s), {skipped_count} duplicate(s) skipped. It will start automatically."
+        )
+    else:
+        task_id = enqueue_pipeline(run_id, new_documents)
+        await run_repo.set_celery_root_task_id(run_id, task_id)
+        run_status = "queued"
+        message = (
+            f"Pipeline run queued: {new_count} new/reprocessed document(s), "
+            f"{skipped_count} duplicate(s) skipped."
+        )
 
     from iso_robot.observability.context import bind_context
 
@@ -270,12 +345,12 @@ async def ingest(
 
     return ApiResponse(
         status="accepted",
-        message=f"Pipeline run queued: {new_count} new/reprocessed document(s), {skipped_count} duplicate(s) skipped.",
+        message=message,
         data={
             "client_org_id": client_org_id,
             "pipeline_run_id": run_id,
             "celery_task_id": task_id,
-            "status": "queued",
+            "status": run_status,
             "save_to_storage": effective_save,
             "force_reprocess": force_reprocess,
             "total_documents": total,

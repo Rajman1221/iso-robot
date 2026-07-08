@@ -4,6 +4,7 @@ from typing import Annotated, Optional
 
 from fastapi import BackgroundTasks, Depends, Query
 
+from iso_robot.domain.job_dispatch import dispatch_legacy_job
 from iso_robot.domain.job_runner import execute_job
 from iso_robot.domain.job_service import create_job
 from iso_robot.deps import get_job_repo
@@ -32,7 +33,7 @@ async def create_job_handler(
 ) -> JobResponse:
     row = await create_job(repo, job_type=body.type, payload=body.payload)
     if body.type in _ASYNC_JOB_TYPES:
-        background_tasks.add_task(execute_job, row["id"], body.type, dict(body.payload or {}))
+        dispatch_legacy_job(row["id"], body.type, dict(body.payload or {}), background_tasks=background_tasks)
     return JobResponse(**row)
 
 

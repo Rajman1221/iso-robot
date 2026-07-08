@@ -8,6 +8,7 @@ from fastapi import BackgroundTasks, Depends
 
 from iso_robot.config import Settings
 from iso_robot.deps import get_app_settings, get_current_user, get_db, get_job_repo
+from iso_robot.domain.job_dispatch import dispatch_legacy_job
 from iso_robot.domain.job_runner import execute_job
 from iso_robot.domain.job_service import create_job
 from iso_robot.domain.poc_import import default_poc_path
@@ -125,9 +126,11 @@ async def seed_risk_library_handler(
 async def run_risk_discovery(
     background_tasks: BackgroundTasks,
     jobs: Annotated[JobRepository, Depends(get_job_repo)],
+    current_user: Annotated[dict, Depends(get_current_user)],
 ) -> JobResponse:
-    row = await create_job(jobs, job_type="risk_discovery", payload={})
-    background_tasks.add_task(execute_job, row["id"], "risk_discovery", {})
+    payload: dict[str, Any] = {"client_org_id": current_user.get("client_org_id")}
+    row = await create_job(jobs, job_type="risk_discovery", payload=payload)
+    dispatch_legacy_job(row["id"], "risk_discovery", payload, background_tasks=background_tasks)
     return JobResponse(**row)
 
 
@@ -149,7 +152,7 @@ async def run_risk_scoring(
             payload["controls"] = request.controls
 
     row = await create_job(jobs, job_type="score_risks", payload=payload)
-    background_tasks.add_task(execute_job, row["id"], "score_risks", payload)
+    dispatch_legacy_job(row["id"], "score_risks", payload, background_tasks=background_tasks)
     return JobResponse(**row)
 
 

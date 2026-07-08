@@ -12,7 +12,7 @@ it never propagates into the request that triggered it.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, TypedDict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,17 @@ STAGE_ASSIGNMENT = "assignment"
 # Milvus VARCHAR limit, with a little overlap so requirements aren't cut in half.
 _CHUNK_CHARS = 4000
 _CHUNK_OVERLAP = 300
+
+
+class EntitySpec(TypedDict, total=False):
+    """One indexable entity: the fields a chunk record needs, minus the vector."""
+
+    entity_type: str
+    entity_id: str
+    stage: str
+    source_table: str
+    text: str
+    updated_at: str
 
 
 def _clean(value: Any) -> str:
@@ -129,6 +140,64 @@ class IndexingService:
             )
             return 0
 
+    async def index_entities_bulk(
+        self, client_org_id: str, specs: Sequence["EntitySpec"]
+    ) -> int:
+        """Chunk → batch-embed → bulk-upsert many entities in a few round-trips.
+
+        Replaces N per-entity (embed + upsert) calls with: one grouped delete of
+        the old chunks, embeddings batched at ``embedding_max_batch`` chunks per
+        call, and bulk upserts. Error-isolated like every other public method.
+        """
+        if not self.active or not client_org_id or not specs:
+            return 0
+        try:
+            # Expand every entity into its chunks, remembering which spec each belongs to.
+            plan: List[tuple["EntitySpec", int, str]] = []
+            ids_by_type: Dict[str, List[str]] = {}
+            for spec in specs:
+                entity_id = spec.get("entity_id")
+                if not entity_id:
+                    continue
+                ids_by_type.setdefault(spec["entity_type"], []).append(entity_id)
+                for i, chunk in enumerate(
+                    chunk_by_chars(spec.get("text") or "", max_chars=_CHUNK_CHARS, overlap=_CHUNK_OVERLAP)
+                ):
+                    plan.append((spec, i, chunk))
+
+            # Clear prior chunks for exactly these entities (no org-wide wipe).
+            for entity_type, ids in ids_by_type.items():
+                await self._vectors.delete_by_entity_ids(
+                    client_org_id=client_org_id, entity_type=entity_type, entity_ids=ids
+                )
+            if not plan:
+                return 0
+
+            batch_size = max(1, self._settings.embedding_max_batch)
+            written = 0
+            for start in range(0, len(plan), batch_size):
+                window = plan[start : start + batch_size]
+                vectors = await embed_texts(self._settings, [chunk for _, _, chunk in window])
+                records = [
+                    {
+                        "id": make_chunk_id(spec["entity_type"], spec["entity_id"], chunk_index),
+                        "vector": vectors[j],
+                        "client_org_id": client_org_id,
+                        "stage": spec["stage"],
+                        "entity_type": spec["entity_type"],
+                        "entity_id": spec["entity_id"],
+                        "source_table": spec["source_table"],
+                        "updated_at": spec.get("updated_at") or "",
+                        "text": chunk,
+                    }
+                    for j, (spec, chunk_index, chunk) in enumerate(window)
+                ]
+                written += await self._vectors.upsert(records)
+            return written
+        except Exception:  # noqa: BLE001 — indexing must never break the caller
+            logger.exception("Bulk indexing failed for org=%s (%d entities)", client_org_id, len(specs))
+            return 0
+
     async def remove_entity(self, *, client_org_id: str, entity_type: str, entity_id: str) -> bool:
         if not self._vectors.enabled:
             return False
@@ -181,29 +250,31 @@ class IndexingService:
         )
 
     async def index_control(self, client_org_id: str, control: Dict[str, Any]) -> int:
-        control_id = _clean(control.get("id"))
-        page = control.get("source_page")
-        lines = [
-            f"Control{f' (section {_clean(control.get('section_ref'))})' if control.get('section_ref') else ''}:",
-            _clean(control.get("control_text")),
-            f"Framework: {_clean(control.get('framework'))}" if control.get("framework") else "",
-            f"Source page: {page}" if page is not None else "",
-        ]
         return await self._index_entity(
             client_org_id=client_org_id,
             entity_type="control",
-            entity_id=control_id,
+            entity_id=_clean(control.get("id")),
             stage=STAGE_CONTROL,
             source_table="controls",
-            text=_join_lines(lines),
+            text=_control_text(control),
             updated_at=_clean(control.get("created_at")),
         )
 
+    def _control_spec(self, control: Dict[str, Any]) -> "EntitySpec":
+        return {
+            "entity_type": "control",
+            "entity_id": _clean(control.get("id")),
+            "stage": STAGE_CONTROL,
+            "source_table": "controls",
+            "text": _control_text(control),
+            "updated_at": _clean(control.get("created_at")),
+        }
+
     async def index_controls(self, client_org_id: str, controls: Sequence[Dict[str, Any]]) -> int:
-        total = 0
-        for control in controls or []:
-            total += await self.index_control(client_org_id, control)
-        return total
+        """Bulk-index controls: batched embeddings + one bulk upsert (not per row)."""
+        return await self.index_entities_bulk(
+            client_org_id, [self._control_spec(c) for c in controls or []]
+        )
 
     async def reindex_controls(self, client_org_id: str) -> int:
         """Replace all control chunks for an org with the current DB set.
@@ -231,25 +302,41 @@ class IndexingService:
         classification: Optional[Dict[str, Any]] = None,
         assessment: Optional[Dict[str, Any]] = None,
     ) -> int:
-        issue_id = _clean(issue.get("id"))
-        lines = [
-            f"Issue: {_clean(issue.get('title'))}",
-            _clean(issue.get("body")),
-            f"Region: {_clean(issue.get('region_hint'))}" if issue.get("region_hint") else "",
-        ]
-        if classification:
-            lines.append(_classification_summary(classification))
-        if assessment:
-            lines.append(_assessment_summary(assessment))
         return await self._index_entity(
             client_org_id=client_org_id,
             entity_type="issue",
-            entity_id=issue_id,
+            entity_id=_clean(issue.get("id")),
             stage=STAGE_ISSUE,
             source_table="issues",
-            text=_join_lines(lines),
+            text=_issue_text(issue, classification, assessment),
             updated_at=_clean(issue.get("created_at")),
         )
+
+    def _issue_spec(
+        self,
+        issue: Dict[str, Any],
+        classification: Optional[Dict[str, Any]] = None,
+        assessment: Optional[Dict[str, Any]] = None,
+    ) -> "EntitySpec":
+        return {
+            "entity_type": "issue",
+            "entity_id": _clean(issue.get("id")),
+            "stage": STAGE_ISSUE,
+            "source_table": "issues",
+            "text": _issue_text(issue, classification, assessment),
+            "updated_at": _clean(issue.get("created_at")),
+        }
+
+    async def index_issues_bulk(
+        self, client_org_id: str, items: Sequence[Dict[str, Any]]
+    ) -> int:
+        """Bulk-index issues. Each item: ``{issue, classification?, assessment?}``."""
+        specs = [
+            self._issue_spec(it["issue"], it.get("classification"), it.get("assessment"))
+            for it in items
+            if it.get("issue")
+        ]
+        return await self.index_entities_bulk(client_org_id, specs)
 
     async def index_aggregate(
         self, client_org_id: str, classifications: Sequence[Dict[str, Any]]
@@ -286,38 +373,31 @@ class IndexingService:
         return await self.index_aggregate(client_org_id, classifications)
 
     async def index_published_risk(self, client_org_id: str, risk: Dict[str, Any]) -> int:
-        risk_id = _clean(risk.get("id"))
-        lines = [
-            f"Risk: {_clean(risk.get('risk_title'))}",
-            _clean(risk.get("risk_description")),
-            f"Rating: {_clean(risk.get('risk_rating'))} | Score: {_clean(risk.get('risk_score'))}",
-        ]
-        for label, key in (
-            ("Mapped controls", "mapped_controls"),
-            ("Mapped functions", "mapped_functions"),
-            ("Mapped locations", "mapped_locations"),
-            ("Mapped processes", "mapped_processes"),
-            ("Process tags", "process_tags"),
-            ("Function tags", "function_tags"),
-            ("Department tags", "department_tags"),
-            ("KPI tags", "kpi_tags"),
-            ("Region tags", "region_tags"),
-            ("Control family tags", "control_family_tags"),
-        ):
-            values = _names(risk.get(key))
-            if values:
-                lines.append(f"{label}: " + ", ".join(values))
-        owner = risk.get("owner") if isinstance(risk.get("owner"), dict) else None
-        if owner and owner.get("name"):
-            lines.append(f"Owner: {_clean(owner.get('name'))} ({_clean(owner.get('title'))})")
         return await self._index_entity(
             client_org_id=client_org_id,
             entity_type="risk",
-            entity_id=risk_id,
+            entity_id=_clean(risk.get("id")),
             stage=STAGE_RISK,
             source_table="risks",
-            text=_join_lines(lines),
+            text=_published_risk_text(risk),
             updated_at=_clean(risk.get("updated_at") or risk.get("created_at")),
+        )
+
+    def _published_risk_spec(self, risk: Dict[str, Any]) -> "EntitySpec":
+        return {
+            "entity_type": "risk",
+            "entity_id": _clean(risk.get("id")),
+            "stage": STAGE_RISK,
+            "source_table": "risks",
+            "text": _published_risk_text(risk),
+            "updated_at": _clean(risk.get("updated_at") or risk.get("created_at")),
+        }
+
+    async def index_published_risks_bulk(
+        self, client_org_id: str, risks: Sequence[Dict[str, Any]]
+    ) -> int:
+        return await self.index_entities_bulk(
+            client_org_id, [self._published_risk_spec(r) for r in risks or []]
         )
 
     async def index_risk_tag(
@@ -469,6 +549,62 @@ class IndexingService:
 
 
 # Text builders
+
+
+def _control_text(control: Dict[str, Any]) -> str:
+    page = control.get("source_page")
+    section = _clean(control.get("section_ref"))
+    lines = [
+        f"Control{f' (section {section})' if section else ''}:",
+        _clean(control.get("control_text")),
+        f"Framework: {_clean(control.get('framework'))}" if control.get("framework") else "",
+        f"Source page: {page}" if page is not None else "",
+    ]
+    return _join_lines(lines)
+
+
+def _issue_text(
+    issue: Dict[str, Any],
+    classification: Optional[Dict[str, Any]] = None,
+    assessment: Optional[Dict[str, Any]] = None,
+) -> str:
+    lines = [
+        f"Issue: {_clean(issue.get('title'))}",
+        _clean(issue.get("body")),
+        f"Region: {_clean(issue.get('region_hint'))}" if issue.get("region_hint") else "",
+    ]
+    if classification:
+        lines.append(_classification_summary(classification))
+    if assessment:
+        lines.append(_assessment_summary(assessment))
+    return _join_lines(lines)
+
+
+def _published_risk_text(risk: Dict[str, Any]) -> str:
+    lines = [
+        f"Risk: {_clean(risk.get('risk_title'))}",
+        _clean(risk.get("risk_description")),
+        f"Rating: {_clean(risk.get('risk_rating'))} | Score: {_clean(risk.get('risk_score'))}",
+    ]
+    for label, key in (
+        ("Mapped controls", "mapped_controls"),
+        ("Mapped functions", "mapped_functions"),
+        ("Mapped locations", "mapped_locations"),
+        ("Mapped processes", "mapped_processes"),
+        ("Process tags", "process_tags"),
+        ("Function tags", "function_tags"),
+        ("Department tags", "department_tags"),
+        ("KPI tags", "kpi_tags"),
+        ("Region tags", "region_tags"),
+        ("Control family tags", "control_family_tags"),
+    ):
+        values = _names(risk.get(key))
+        if values:
+            lines.append(f"{label}: " + ", ".join(values))
+    owner = risk.get("owner") if isinstance(risk.get("owner"), dict) else None
+    if owner and owner.get("name"):
+        lines.append(f"Owner: {_clean(owner.get('name'))} ({_clean(owner.get('title'))})")
+    return _join_lines(lines)
 
 
 def _classification_summary(classification: Dict[str, Any]) -> str:

@@ -475,6 +475,59 @@ class RiskRepository:
         obj = await self._session.get(Risk, risk_id)
         return self._normalize(to_dict(obj)) if obj else {}
 
+    async def create_many(
+        self, client_org_id: str, rows: List[dict[str, Any]]
+    ) -> List[dict[str, Any]]:
+        """Bulk-create risks in a single commit. Each row mirrors :meth:`create`'s
+        kwargs (issue_id, risk_title, risk_description, risk_rating, risk_score,
+        mapped_controls?, submitted_by?). Returns the created (normalized) rows."""
+        if not rows:
+            return []
+        created: List[dict[str, Any]] = []
+        for r in rows:
+            risk_id = str(uuid.uuid4())
+            self._session.add(
+                Risk(
+                    id=risk_id,
+                    client_org_id=client_org_id,
+                    issue_id=r.get("issue_id"),
+                    risk_title=r.get("risk_title") or "Untitled risk",
+                    risk_description=r.get("risk_description"),
+                    risk_rating=r.get("risk_rating"),
+                    risk_score=r.get("risk_score"),
+                    mapped_controls_json=r.get("mapped_controls") or [],
+                    mapped_functions_json=r.get("mapped_functions") or [],
+                    mapped_locations_json=r.get("mapped_locations") or [],
+                    mapped_processes_json=r.get("mapped_processes") or [],
+                    submitted_by=r.get("submitted_by"),
+                )
+            )
+            created.append({"id": risk_id, "issue_id": r.get("issue_id")})
+        await self._session.commit()
+        # Re-read for full normalized shape (owners etc.) used by the indexer.
+        ids = [c["id"] for c in created]
+        objs = (
+            await self._session.execute(select(Risk).where(Risk.id.in_(ids)))
+        ).scalars().all()
+        owners = await self._owner_lookup(client_org_id)
+        return [self._normalize(to_dict(o), owners) for o in objs]
+
+    async def list_issue_ids_with_auto_risks(
+        self, client_org_id: str, *, submitted_by: str = "automated_pipeline"
+    ) -> set[str]:
+        """Issue ids that already have an auto-promoted risk — lets the scoring
+        join skip them so a retry never creates duplicate risks."""
+        rows = (
+            await self._session.execute(
+                select(Risk.issue_id).where(
+                    Risk.client_org_id == client_org_id,
+                    Risk.submitted_by == submitted_by,
+                    Risk.issue_id.is_not(None),
+                )
+            )
+        ).scalars().all()
+        return {str(iid) for iid in rows if iid}
+
     async def _owner_lookup(self, client_org_id: str) -> Dict[str, dict[str, Any]]:
         """Latest org_hierarchy_users row per user_id for this org (portable
         replacement for the old ROW_NUMBER()-partitioned SQL join)."""

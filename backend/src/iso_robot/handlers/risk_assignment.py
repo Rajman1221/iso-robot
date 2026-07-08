@@ -15,6 +15,7 @@ from iso_robot.deps import (
     get_org_repo,
 )
 from iso_robot.domain.indexing_service import IndexingService
+from iso_robot.domain.job_dispatch import dispatch_legacy_job
 from iso_robot.domain.job_runner import execute_job
 from iso_robot.domain.job_service import create_job
 from iso_robot.domain.risk_owner_assignment import HIGH_RATINGS, ensure_default_hierarchy
@@ -166,7 +167,7 @@ async def run_risk_assignment(
         "requested_by": current_user.get("id"),
     }
     row = await create_job(jobs, job_type="risk_owner_assignment", payload=payload)
-    background_tasks.add_task(execute_job, row["id"], "risk_owner_assignment", payload)
+    dispatch_legacy_job(row["id"], "risk_owner_assignment", payload, background_tasks=background_tasks)
 
     await audit_repo.log(
         api_name="risk_owner_assignment_run",

@@ -11,6 +11,7 @@ from rank_bm25 import BM25Okapi
 from iso_robot.config import Settings
 from iso_robot.domain.heuristics import heuristic_candidate_risks, heuristic_library_match
 from iso_robot.domain.llm_service import chat_json_object
+from iso_robot.helpers.concurrency import gather_bounded
 from iso_robot.repositories.issue_repository import IssueClassificationRepository, IssueRepository
 from iso_robot.repositories.risk_repository import (
     CandidateRiskRepository,
@@ -25,15 +26,23 @@ def tokenize(text: str) -> List[str]:
     return re.findall(r"[a-z0-9]+", (text or "").lower())
 
 
+def _build_bm25(library: List[dict[str, Any]]) -> Optional[BM25Okapi]:
+    """Tokenize + index the whole risk library ONCE; reused for every candidate
+    (building this per-candidate re-tokenized the entire corpus each iteration)."""
+    if not library:
+        return None
+    corpus = [tokenize(f"{row.get('title') or ''} {row.get('description') or ''}") for row in library]
+    return BM25Okapi(corpus)
+
+
 def _bm25_shortlist(
     library: List[dict[str, Any]],
+    bm25: Optional[BM25Okapi],
     query: str,
     k: int = 10,
 ) -> List[Tuple[dict[str, Any], float]]:
-    if not library:
+    if not library or bm25 is None:
         return []
-    corpus = [tokenize(f"{row.get('title') or ''} {row.get('description') or ''}") for row in library]
-    bm25 = BM25Okapi(corpus)
     q = tokenize(query)
     scores = bm25.get_scores(q) if q else [0.0] * len(library)
     ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
@@ -61,7 +70,7 @@ async def _llm_discover_candidates(
     )
     user = "Issues (JSON):\n" + json.dumps(bundle, ensure_ascii=False)[:120000]
     try:
-        data = await chat_json_object(settings, system=system, user=user)
+        data = await chat_json_object(settings, system=system, user=user, stage="risk_discovery")
         cands = data.get("candidates")
     except Exception as exc:
         logger.warning("LLM risk discovery failed: %s; using heuristic candidates.", exc)
@@ -125,7 +134,7 @@ async def _llm_match_library(
         f"Shortlist:\n{json.dumps(lib, ensure_ascii=False)}"
     )
     try:
-        return await chat_json_object(settings, system=system, user=user)
+        return await chat_json_object(settings, system=system, user=user, stage="risk_discovery")
     except Exception as exc:
         logger.warning("LLM library match failed: %s; using BM25 heuristic.", exc)
         return heuristic_library_match(candidate, shortlist)
@@ -134,6 +143,7 @@ async def _llm_match_library(
 async def run_risk_discovery(
     settings: Settings,
     conn: AsyncSession,
+    client_org_id: str,
 ) -> dict[str, int]:
     issue_repo = IssueRepository(conn)
     cls_repo = IssueClassificationRepository(conn)
@@ -141,7 +151,7 @@ async def run_risk_discovery(
     res_repo = RiskDiscoveryResultRepository(conn)
     lib_repo = RiskLibraryRepository(conn)
 
-    issues = await issue_repo.list_all(limit=5000, offset=0)
+    issues = await issue_repo.list_all(limit=5000, offset=0, client_org_id=client_org_id)
     if not issues:
         return {"candidates": 0, "matches": 0}
 
@@ -160,10 +170,15 @@ async def run_risk_discovery(
         bundle.append(entry)
 
     candidates = await _llm_discover_candidates(settings, bundle)
-    await cand_repo.clear_all()
+    await cand_repo.clear_for_org(client_org_id)
 
     library = await lib_repo.list_all(limit=5000, offset=0)
-    matches_written = 0
+    bm25 = _build_bm25(library)
+
+    # Pre-pass (sequential DB writes + cheap BM25 scoring): persist each candidate
+    # and compute its shortlist. A shared AsyncSession can't be touched from the
+    # concurrent section below, so all writes happen here first.
+    prepared: List[dict[str, Any]] = []
     for c in candidates:
         cid = str(uuid.uuid4())
         await cand_repo.insert(
@@ -173,9 +188,42 @@ async def run_risk_discovery(
             description=c.get("description") or None,
             domain=c.get("domain"),
             confidence=c.get("confidence"),
+            client_org_id=client_org_id,
         )
         query = f"{c.get('title') or ''} {c.get('description') or ''}"
-        shortlist = _bm25_shortlist(library, query, k=10)
+        shortlist = _bm25_shortlist(library, bm25, query, k=10)
+        match_input = {
+            "title": c.get("title"),
+            "description": c.get("description"),
+            "domain": c.get("domain"),
+            "confidence": c.get("confidence"),
+            "issue_ids": c["issue_ids"],
+        }
+        prepared.append({"cid": cid, "shortlist": shortlist, "match_input": match_input})
+
+    # Concurrent section: ONLY the per-candidate library-match LLM calls (no DB).
+    to_match = [p for p in prepared if p["shortlist"]]
+    match_results = await gather_bounded(
+        [
+            (lambda p=p: _llm_match_library(settings, p["match_input"], p["shortlist"]))
+            for p in to_match
+        ],
+        limit=settings.discovery_llm_concurrency,
+        label="risk_discovery_match",
+    )
+    matches_by_cid: dict[str, dict[str, Any]] = {}
+    for p, res in zip(to_match, match_results):
+        # _llm_match_library already falls back to heuristics internally; guard
+        # against an unexpected escaped exception to keep item-level isolation.
+        if isinstance(res, BaseException):
+            res = heuristic_library_match(p["match_input"], p["shortlist"])
+        matches_by_cid[p["cid"]] = res
+
+    # Post-pass (sequential DB writes): persist a discovery result per candidate.
+    matches_written = 0
+    for p in prepared:
+        cid = p["cid"]
+        shortlist = p["shortlist"]
         if not shortlist:
             await res_repo.insert(
                 row_id=str(uuid.uuid4()),
@@ -188,17 +236,7 @@ async def run_risk_discovery(
             matches_written += 1
             continue
 
-        match = await _llm_match_library(
-            settings,
-            {
-                "title": c.get("title"),
-                "description": c.get("description"),
-                "domain": c.get("domain"),
-                "confidence": c.get("confidence"),
-                "issue_ids": c["issue_ids"],
-            },
-            shortlist,
-        )
+        match = matches_by_cid.get(cid) or {}
         status_raw = str(match.get("match") or "ambiguous").lower()
         if status_raw not in ("existing", "new", "ambiguous"):
             status_raw = "ambiguous"

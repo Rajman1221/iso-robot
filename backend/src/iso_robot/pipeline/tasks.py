@@ -286,8 +286,7 @@ def risk_discovery(self, run_id: str, documents: list[Any] | None = None) -> Non
             steps, pipeline_run_id=run_id, stage="risk_discovery", documents=documents
         )
         await start_steps(steps, step_rows)
-        # Global-by-design today, same caveat as generate_charts (see plan notes).
-        result = await run_risk_discovery(settings, session)
+        result = await run_risk_discovery(settings, session, run["client_org_id"])
         await complete_steps(steps, step_rows, result=result)
 
     run_async(_run)
@@ -417,18 +416,29 @@ def pipeline_failed(self, run_id: str) -> None:
     whichever `pipeline_document_steps` row failed; this just flips the run.
     """
 
-    async def _run(session: AsyncSession) -> bool:
+    async def _run(session: AsyncSession) -> dict:
         run_repo = PipelineRunRepository(session)
         steps = PipelineStepRepository(session)
         run = await run_repo.get(run_id)
         if run is None:
-            return False
+            return {"cleanup": False, "next_run": None}
         if run.get("status") not in ("completed", "failed"):
             failed_steps = [s for s in await steps.list_for_run(run_id) if s["status"] == "failed"]
             detail = failed_steps[-1]["error"] if failed_steps else "Pipeline stage failed unexpectedly."
             await run_repo.mark_failed(run_id, detail or "Pipeline stage failed unexpectedly.")
-        return not run["save_to_storage"]
+        # A failed run must not stall the org's queue — start the next waiting run.
+        nxt = await run_repo.pop_next_waiting(run["client_org_id"])
+        return {"cleanup": not run["save_to_storage"], "next_run": nxt}
 
-    if run_async(_run):
+    outcome = run_async(_run)
+    if outcome["cleanup"]:
         cleanup_ephemeral_uploads(run_id)
+    nxt = outcome["next_run"]
+    if nxt:
+        from iso_robot.pipeline import tasks_v2
+
+        tasks_v2.pipeline_v2_start.apply_async(
+            args=[nxt["id"], tasks_v2._documents_for_waiting_run(nxt["id"])],
+            queue="pipeline.orchestrator",
+        )
     logger.error("Pipeline run %s failed", run_id)

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from iso_robot.config import Settings
 from iso_robot.domain.llm_service import chat_json_object
+from iso_robot.helpers.concurrency import gather_bounded
 from iso_robot.repositories.issue_repository import IssueRepository
 from iso_robot.repositories.issue_control_repository import IssueControlRepository
 from iso_robot.repositories.job_repository import JobRepository
@@ -516,7 +517,7 @@ async def _llm_refine_tags(
         f"Risk:\n{_json.dumps({'title': risk.get('risk_title'), 'description': risk.get('risk_description'), 'rating': risk.get('risk_rating')}, ensure_ascii=False)}\n\n"
         f"Catalog shortlists by dimension:\n{_json.dumps(shortlists, ensure_ascii=False)[:60000]}"
     )
-    data = await chat_json_object(settings, system=system, user=user)
+    data = await chat_json_object(settings, system=system, user=user, stage="risk_tagging")
     selections = data.get("selections")
     if not isinstance(selections, dict):
         return deterministic
@@ -625,7 +626,9 @@ async def run_risk_tagging_job(
     }
     await jobs.merge_payload(job_id, {"progress": progress})
 
-    llm_available = True
+    # Pass 1 (sequential): read per-risk session inputs and build deterministic
+    # matches. The AsyncSession is single-owner, so every DB read happens here.
+    work_items: List[Tuple[dict[str, Any], Dict[str, List[dict[str, Any]]], List[str]]] = []
     for risk in eligible:
         issue_text = ""
         control_texts: List[str] = []
@@ -638,13 +641,30 @@ async def run_risk_tagging_job(
         deterministic, evidence = _build_tag_recommendations(
             risk, issue_text, control_texts, items_by_dimension, dimensions
         )
-        tags = deterministic
-        if llm_available:
-            try:
-                tags = await _llm_refine_tags(settings, risk, deterministic, items_by_dimension, dimensions)
-            except Exception as exc:
-                llm_available = False
-                logger.warning("LLM tag refinement unavailable (%s); using deterministic matching.", exc)
+        work_items.append((risk, deterministic, evidence))
+
+    # Pass 2 (concurrent): pure LLM refinement only — no session access inside.
+    refined_results = await gather_bounded(
+        [
+            (lambda r=risk, d=deterministic: _llm_refine_tags(settings, r, d, items_by_dimension, dimensions))
+            for risk, deterministic, _evidence in work_items
+        ],
+        limit=settings.tagging_llm_concurrency,
+        label="risk_tagging",
+    )
+
+    # Pass 3 (sequential): persist tags and progress. Each LLM failure falls back
+    # to that risk's own deterministic matches — never a run-wide LLM disable.
+    commit_every = max(1, settings.progress_update_every)
+    for (risk, deterministic, evidence), result in zip(work_items, refined_results):
+        if isinstance(result, BaseException):
+            tags = deterministic
+            logger.warning(
+                "LLM tag refinement failed for risk %s (%s); using deterministic matching.",
+                risk.get("id"), result,
+            )
+        else:
+            tags = result
 
         confidence = _aggregate_confidence(tags)
         tag_count = sum(len(v) for v in tags.values())
@@ -706,6 +726,8 @@ async def run_risk_tagging_job(
             progress["tags_applied"] += tag_count
         if status in ("proposed", "applied"):
             progress["tags_proposed"] += tag_count
-        await jobs.merge_payload(job_id, {"progress": progress})
+        if progress["risks_processed"] % commit_every == 0:
+            await jobs.merge_payload(job_id, {"progress": progress})
 
+    await jobs.merge_payload(job_id, {"progress": progress})
     return progress

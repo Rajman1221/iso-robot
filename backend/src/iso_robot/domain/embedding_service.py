@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import List, Sequence
 
 from iso_robot.config import Settings
@@ -48,7 +49,25 @@ async def embed_texts(settings: Settings, texts: Sequence[str]) -> List[List[flo
     deployment = _deployment(settings)
     payload = [(t or " ").strip() or " " for t in texts]
 
-    response = await client.embeddings.create(model=deployment, input=payload)
+    from iso_robot.observability.metrics import (
+        EMBEDDING_REQUEST_DURATION_SECONDS,
+        EMBEDDING_REQUESTS_TOTAL,
+        EMBEDDING_TEXTS_TOTAL,
+    )
+
+    start = time.perf_counter()
+    try:
+        response = await client.embeddings.create(model=deployment, input=payload)
+    except Exception:
+        EMBEDDING_REQUESTS_TOTAL.labels(deployment=deployment, status="error").inc()
+        raise
+    finally:
+        EMBEDDING_REQUEST_DURATION_SECONDS.labels(deployment=deployment).observe(
+            time.perf_counter() - start
+        )
+    EMBEDDING_REQUESTS_TOTAL.labels(deployment=deployment, status="ok").inc()
+    EMBEDDING_TEXTS_TOTAL.labels(deployment=deployment).inc(len(payload))
+
     # Azure may return items out of order; sort by the echoed index to be safe.
     ordered = sorted(response.data, key=lambda item: item.index)
     return [list(item.embedding) for item in ordered]

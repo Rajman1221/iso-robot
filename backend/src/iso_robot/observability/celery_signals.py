@@ -70,6 +70,14 @@ def _extract_document_id(args: tuple, kwargs: dict) -> Optional[str]:
 
 @worker_process_init.connect
 def on_worker_process_init(**_kwargs: Any) -> None:
+    # Prefork forks AFTER module import, so a child could inherit an engine the
+    # parent built. Drop the cached engine/session factory so each worker
+    # process lazily builds its own bound to its own event loop.
+    from iso_robot.repositories.database import get_engine, get_session_factory
+
+    get_engine.cache_clear()
+    get_session_factory.cache_clear()
+
     settings = get_settings()
     if not settings.observability_enabled:
         return
@@ -178,18 +186,12 @@ def on_task_postrun(
 
     # Track per-document extraction outcomes.
     if task_name == "extract_controls" and isinstance(retval, dict):
-        run_id = retval.get("run_id")
-        if not run_id and task is not None:
-            req_args = getattr(getattr(task, "request", None), "args", ()) or ()
-            run_id = _extract_run_id(req_args, {})
         client_org_id = retval.get("client_org_id", "unknown")
         doc_status = "failed" if retval.get("error") else "success"
-        if run_id:
-            PIPELINE_DOCUMENTS_PROCESSED_TOTAL.labels(
-                pipeline_run_id=str(run_id),
-                client_org_id=str(client_org_id),
-                status=doc_status,
-            ).inc()
+        PIPELINE_DOCUMENTS_PROCESSED_TOTAL.labels(
+            client_org_id=str(client_org_id),
+            status=doc_status,
+        ).inc()
 
     logger.info(
         "task_finished",

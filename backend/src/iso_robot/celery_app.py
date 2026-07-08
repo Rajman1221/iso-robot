@@ -17,6 +17,7 @@ Run workers with, e.g.:
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any, Awaitable, Callable, TypeVar
 
 from celery import Celery
@@ -68,7 +69,7 @@ celery_app = Celery(
     "iso_robot_pipeline",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["iso_robot.pipeline.tasks"],
+    include=["iso_robot.pipeline.tasks", "iso_robot.pipeline.tasks_v2"],
 )
 
 celery_app.conf.update(
@@ -105,6 +106,26 @@ celery_app.conf.update(
 )
 
 
+_loop_lock = threading.Lock()
+_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _worker_event_loop() -> asyncio.AbstractEventLoop:
+    """One long-lived event loop (daemon thread) per worker process.
+
+    The SQLAlchemy async engine's connection pool binds to the loop that first
+    uses it; a loop-per-task (``asyncio.run``) would strand every previous
+    task's pooled connections, which breaks asyncpg outright.
+    """
+    global _loop
+    with _loop_lock:
+        if _loop is None or _loop.is_closed():
+            loop = asyncio.new_event_loop()
+            threading.Thread(target=loop.run_forever, name="iso-robot-async", daemon=True).start()
+            _loop = loop
+        return _loop
+
+
 def run_async(factory: Callable[[AsyncSession], Awaitable[T]]) -> T:
     """Bridge a sync Celery task body into the async domain layer."""
     from iso_robot.repositories.database import get_session_factory
@@ -114,4 +135,4 @@ def run_async(factory: Callable[[AsyncSession], Awaitable[T]]) -> T:
         async with session_factory() as session:
             return await factory(session)
 
-    return asyncio.run(_runner())
+    return asyncio.run_coroutine_threadsafe(_runner(), _worker_event_loop()).result()

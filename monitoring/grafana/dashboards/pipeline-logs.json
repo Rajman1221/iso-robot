@@ -1,0 +1,60 @@
+{
+  "uid": "iso-pipeline-logs",
+  "title": "ISO Robot — Pipeline Logs",
+  "tags": ["iso-robot", "pipeline", "logs"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "pipeline_run_id",
+        "type": "textbox",
+        "label": "Pipeline Run ID",
+        "query": "",
+        "current": {"text": "", "value": ""},
+        "options": [],
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Recent Worker / API Errors",
+      "type": "logs",
+      "gridPos": {"h": 11, "w": 24, "x": 0, "y": 0},
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {"expr": "{container=~\"/?iso-robot-worker-.*|/?iso-robot-api\"} |= \"error\"", "queryType": "range", "refId": "A"}
+      ],
+      "datasource": {"type": "loki", "uid": "Loki"}
+    },
+    {
+      "id": 2,
+      "title": "Logs for Pipeline Run: $pipeline_run_id",
+      "type": "logs",
+      "gridPos": {"h": 11, "w": 24, "x": 0, "y": 11},
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {"expr": "{container=~\"/?iso-robot-worker-.*\"} | json | pipeline_run_id=\"$pipeline_run_id\"", "queryType": "range", "refId": "A"}
+      ],
+      "datasource": {"type": "loki", "uid": "Loki"}
+    }
+  ]
+}

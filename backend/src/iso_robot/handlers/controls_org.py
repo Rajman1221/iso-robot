@@ -16,6 +16,7 @@ from iso_robot.deps import (
     get_org_repo,
 )
 from iso_robot.domain.document_scan import scan_documents_directory
+from iso_robot.domain.job_dispatch import dispatch_legacy_job
 from iso_robot.domain.job_runner import execute_job
 from iso_robot.domain.job_service import create_job
 from iso_robot.errors import APIError
@@ -132,7 +133,7 @@ async def extract_controls_for_org(
     }
 
     job_row = await create_job(job_repo, job_type="extract_controls", payload=payload)
-    background_tasks.add_task(execute_job, job_row["id"], "extract_controls", payload)
+    dispatch_legacy_job(job_row["id"], "extract_controls", payload, background_tasks=background_tasks)
 
     await audit_repo.log(
         api_name="control_extract",

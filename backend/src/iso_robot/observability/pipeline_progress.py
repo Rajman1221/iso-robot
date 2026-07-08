@@ -27,14 +27,36 @@ def parse_timestamp(value: Any) -> Optional[datetime]:
         return None
 
 
-def progress_percent(status: str, current_stage: str) -> int:
+def progress_percent(
+    status: str,
+    current_stage: str,
+    stage_totals: Optional[dict[str, Any]] = None,
+) -> int:
+    """Overall completion percent for a run.
+
+    Base is the stage index; if ``stage_totals`` carries batch counts for the
+    current stage (``{stage: {total_batches, completed_batches}}``), the fraction
+    of that stage's batches already done is added so progress advances smoothly
+    within a long stage instead of jumping only at stage boundaries.
+    """
     if status == "completed":
         return 100
+    span = max(len(PIPELINE_STAGES) - 1, 1)
     try:
         idx = PIPELINE_STAGES.index(current_stage)
     except ValueError:
         idx = 0
-    return round(idx / max(len(PIPELINE_STAGES) - 1, 1) * 100)
+
+    intra = 0.0
+    if isinstance(stage_totals, dict):
+        entry = stage_totals.get(current_stage)
+        if isinstance(entry, dict):
+            total = entry.get("total_batches") or 0
+            done = entry.get("completed_batches") or 0
+            if total > 0:
+                intra = min(max(done / total, 0.0), 1.0)
+
+    return round((idx + intra) / span * 100)
 
 
 def stage_summary(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:

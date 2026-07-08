@@ -34,8 +34,12 @@ class DocumentRegistryRepository:
         storage_path: Optional[str],
         saved_to_storage: bool,
         run_id: str,
+        commit: bool = True,
     ) -> tuple[dict[str, Any], bool]:
-        """Register a document for dedup. Returns (row, is_new)."""
+        """Register a document for dedup. Returns (row, is_new).
+
+        Pass ``commit=False`` to batch with the document insert into one
+        transaction (one commit per document at the ingest call site)."""
         stmt = select(DocumentRegistry).where(
             DocumentRegistry.client_org_id == client_org_id, DocumentRegistry.sha256 == sha256
         )
@@ -55,7 +59,10 @@ class DocumentRegistryRepository:
                 times_seen=1,
             )
             self._session.add(obj)
-            await self._session.commit()
+            if commit:
+                await self._session.commit()
+            else:
+                await self._session.flush()
             return to_dict(obj), True
 
         existing.last_seen_run_id = run_id
@@ -63,15 +70,19 @@ class DocumentRegistryRepository:
         if storage_path and not existing.storage_path:
             existing.storage_path = storage_path
             existing.saved_to_storage = saved_to_storage
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
+        else:
+            await self._session.flush()
         return to_dict(existing), False
 
-    async def set_document_id(self, registry_id: str, document_id: str) -> None:
+    async def set_document_id(self, registry_id: str, document_id: str, *, commit: bool = True) -> None:
         obj = await self._session.get(DocumentRegistry, registry_id)
         if obj is None:
             return
         obj.document_id = document_id
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
 
     async def get(self, registry_id: str) -> Optional[dict[str, Any]]:
         obj = await self._session.get(DocumentRegistry, registry_id)
@@ -89,11 +100,12 @@ class PipelineRunRepository:
         save_to_storage: bool,
         force_reprocess: bool,
         requested_by: Optional[str] = None,
+        status: str = "queued",
     ) -> dict[str, Any]:
         obj = PipelineRun(
             id=new_uuid(),
             client_org_id=client_org_id,
-            status="queued",
+            status=status,
             current_stage="ingest_register",
             save_to_storage=save_to_storage,
             force_reprocess=force_reprocess,
@@ -124,6 +136,12 @@ class PipelineRunRepository:
         )
         obj = (await self._session.execute(stmt)).scalars().first()
         return to_dict(obj) if obj else None
+
+    async def count_waiting(self, client_org_id: str) -> int:
+        stmt = select(PipelineRun.id).where(
+            PipelineRun.client_org_id == client_org_id, PipelineRun.status == "waiting"
+        )
+        return len((await self._session.execute(stmt)).scalars().all())
 
     async def set_document_counts(
         self,
@@ -189,6 +207,48 @@ class PipelineRunRepository:
         obj.completed_at = utcnow()
         await self._session.commit()
 
+    # ── v2 batch state machine ─────────────────────────────────────────────────
+
+    async def init_stage_total(self, run_id: str, stage: str, total_batches: int) -> None:
+        """Seed the per-stage batch counters used for progress + resumability."""
+        obj = await self._session.get(PipelineRun, run_id)
+        if obj is None:
+            return
+        totals = dict(obj.stage_totals_json or {})
+        totals[stage] = {"total_batches": total_batches, "completed_batches": 0, "failed_batches": 0}
+        obj.stage_totals_json = totals
+        await self._session.commit()
+
+    async def bump_stage_batch(
+        self, run_id: str, stage: str, *, completed: int = 0, failed: int = 0
+    ) -> None:
+        obj = await self._session.get(PipelineRun, run_id)
+        if obj is None:
+            return
+        totals = dict(obj.stage_totals_json or {})
+        entry = dict(totals.get(stage) or {"total_batches": 0, "completed_batches": 0, "failed_batches": 0})
+        entry["completed_batches"] = int(entry.get("completed_batches", 0)) + completed
+        entry["failed_batches"] = int(entry.get("failed_batches", 0)) + failed
+        totals[stage] = entry
+        obj.stage_totals_json = totals
+        await self._session.commit()
+
+    async def pop_next_waiting(self, client_org_id: str) -> Optional[dict[str, Any]]:
+        """Flip the org's oldest ``waiting`` run to ``queued`` and return it, or
+        None. Drives auto-start of the next queued upload when a run finishes."""
+        stmt = (
+            select(PipelineRun)
+            .where(PipelineRun.client_org_id == client_org_id, PipelineRun.status == "waiting")
+            .order_by(PipelineRun.created_at.asc())
+            .limit(1)
+        )
+        obj = (await self._session.execute(stmt)).scalars().first()
+        if obj is None:
+            return None
+        obj.status = "queued"
+        await self._session.commit()
+        return to_dict(obj)
+
 
 class PipelineStepRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -203,6 +263,8 @@ class PipelineStepRepository:
         document_id: Optional[str] = None,
         filename: Optional[str] = None,
         status: str = "pending",
+        batch_index: Optional[int] = None,
+        result: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         obj = PipelineDocumentStep(
             id=new_uuid(),
@@ -212,10 +274,25 @@ class PipelineStepRepository:
             filename=filename,
             stage=stage,
             status=status,
+            batch_index=batch_index,
+            result_json=result or {},
         )
         self._session.add(obj)
         await self._session.commit()
         return to_dict(obj)
+
+    async def list_for_stage(self, pipeline_run_id: str, stage: str) -> List[dict[str, Any]]:
+        """All step rows for one stage of a run (batch rows), oldest first."""
+        stmt = (
+            select(PipelineDocumentStep)
+            .where(
+                PipelineDocumentStep.pipeline_run_id == pipeline_run_id,
+                PipelineDocumentStep.stage == stage,
+            )
+            .order_by(PipelineDocumentStep.batch_index.asc(), PipelineDocumentStep.created_at.asc())
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [to_dict(r) for r in rows]
 
     async def start(self, step_id: str) -> None:
         obj = await self._session.get(PipelineDocumentStep, step_id)
@@ -252,6 +329,22 @@ class PipelineStepRepository:
         )
         rows = (await self._session.execute(stmt)).scalars().all()
         return [to_dict(r) for r in rows]
+
+    async def get_run_level(self, pipeline_run_id: str, stage: str) -> Optional[dict[str, Any]]:
+        """The stage's run-level summary row (batch_index IS NULL) — where the v2
+        ``finalize_stage`` writes a stage's aggregated result for the next stage."""
+        stmt = (
+            select(PipelineDocumentStep)
+            .where(
+                PipelineDocumentStep.pipeline_run_id == pipeline_run_id,
+                PipelineDocumentStep.stage == stage,
+                PipelineDocumentStep.batch_index.is_(None),
+            )
+            .order_by(PipelineDocumentStep.created_at.desc())
+            .limit(1)
+        )
+        obj = (await self._session.execute(stmt)).scalars().first()
+        return to_dict(obj) if obj else None
 
     async def find_run_level_by_stage(self, pipeline_run_id: str, stage: str) -> Optional[dict[str, Any]]:
         """Latest step for a stage that carries stage result state (e.g. issue_ids).

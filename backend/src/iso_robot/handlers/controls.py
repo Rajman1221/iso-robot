@@ -5,6 +5,7 @@ from typing import Annotated, Optional
 from fastapi import BackgroundTasks, Depends
 
 from iso_robot.deps import get_control_repo, get_job_repo
+from iso_robot.domain.job_dispatch import dispatch_legacy_job
 from iso_robot.domain.job_runner import execute_job
 from iso_robot.domain.job_service import create_job
 from iso_robot.repositories.control_repository import ControlRepository
@@ -32,5 +33,5 @@ async def extract_controls(
     if body.document_ids:
         payload["document_ids"] = body.document_ids
     row = await create_job(jobs, job_type="extract_controls", payload=payload)
-    background_tasks.add_task(execute_job, row["id"], "extract_controls", payload)
+    dispatch_legacy_job(row["id"], "extract_controls", payload, background_tasks=background_tasks)
     return JobResponse(**row)

@@ -34,8 +34,12 @@ class DocumentRepository:
         framework: Optional[str],
         status: str,
         source_url: Optional[str],
+        commit: bool = True,
     ) -> Tuple[str, bool]:
-        """Insert or update by sha256. Returns (document_id, created_new)."""
+        """Insert or update by sha256. Returns (document_id, created_new).
+
+        Pass ``commit=False`` to batch several writes into one transaction (the
+        caller then commits once)."""
         existing = (
             await self._session.execute(select(Document).where(Document.sha256 == sha256))
         ).scalar_one_or_none()
@@ -53,7 +57,10 @@ class DocumentRepository:
                 source_url=source_url,
             )
             self._session.add(obj)
-            await self._session.commit()
+            if commit:
+                await self._session.commit()
+            else:
+                await self._session.flush()
             return obj.id, True
 
         existing.filename = filename
@@ -63,5 +70,8 @@ class DocumentRepository:
         existing.framework = framework or existing.framework
         existing.status = status
         existing.source_url = source_url or existing.source_url
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
+        else:
+            await self._session.flush()
         return existing.id, False

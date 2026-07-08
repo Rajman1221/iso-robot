@@ -36,15 +36,18 @@ same run.
 
 ## What happens
 
-The worker loads all of the org's controls, processes them in batches, and asks
-the LLM to synthesise **3–8 issues per batch**, each citing the `control_ids` it
-was derived from. If `classify_after` is set, a **chained** classification job is
-spawned automatically once the issues exist.
+The worker loads **this run's new controls only** (default
+`ISSUES_GENERATION_SCOPE=new_controls`), processes them in batches of
+`ISSUES_CONTROLS_BATCH_SIZE` (default 22), and asks the LLM to synthesise
+**3–8 issues per batch**, each citing the `control_ids` it was derived from.
+Existing controls, issues, and risks are **never deleted** — re-ingesting only
+adds what the new documents produce. If `classify_after` is set, a **chained**
+classification job is spawned automatically once the issues exist.
 
 ```mermaid
 flowchart TD
     A[POST issues/from-controls/orgId] --> B[Job: issues_from_controls]
-    B --> C[Load all controls for org]
+    B --> C[Load this run's new controls]
     C --> D{Batch controls}
     D --> E[LLM: synthesise issues<br/>title, body, scope, sector, control_ids]
     E --> F[(Insert issues + link to controls)]
@@ -54,6 +57,17 @@ flowchart TD
     H --> J[LLM: PESTEL / SWOT / TVRA per issue]
     J --> K[(Insert classifications)]
 ```
+
+<Info>
+**Incremental & de-duplicated.** Issues are derived from each run's **new
+controls**, so overlapping uploads don't re-create the same issue: a deterministic
+`source_fingerprint` — a SHA-256 over the org, origin, sorted control ids, and
+normalised title, backed by a unique index — suppresses duplicates. Because issues
+are **no longer wiped** between runs, risks that were previously auto-promoted from
+an issue **stay linked** — the old "wipe and re-derive from all of the org's
+controls" behaviour orphaned them. That legacy behaviour is still available via
+`ISSUES_GENERATION_SCOPE=all_controls_replace`.
+</Info>
 
 ## Inputs & outputs
 

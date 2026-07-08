@@ -66,7 +66,7 @@ POST /chatbot/reindex
 **Auth:** Bearer (202 Accepted)
 
 Queues a `reindex_org` background job that **wipes and rebuilds** the Milvus knowledge
-index for an org from the current SQLite database. Use this:
+index for an org from the current relational database (PostgreSQL). Use this:
 
 - The **first time**, to load all existing data into the vector index.
 - After a **bulk import**, to catch records that pre-date the inline indexing hooks.

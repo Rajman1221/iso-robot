@@ -46,6 +46,19 @@ flowchart TD
 Full detail: [Automated Ingest Pipeline](/flow/00-automated-ingest-pipeline) ·
 [Pipeline API](/api-reference/pipeline).
 
+<Info>
+**What runs under the hood.** The pipeline is a batched **dispatch → batch →
+finalize** state machine (default v2, `PIPELINE_V2_ENABLED=true`), not a single
+static chain — item-heavy stages fan out into batches across the worker pool and
+make their LLM calls concurrently. The stage **order above is unchanged**, but the
+behaviour is now **incremental**: issue generation derives only from each run's
+new controls and existing controls, issues, and risks are never wiped, while risk
+discovery and chart aggregation are **org-scoped**. A second ingest while a run is
+active is queued as a **`waiting`** run rather than rejected. Pipeline state lives
+in **PostgreSQL** by default (SQLite still works for local dev). The chatbot Milvus
+reindex remains a **separate, manual** step outside the `/ingest` chain.
+</Info>
+
 ### Automated happy path
 
 <Steps>

@@ -36,7 +36,7 @@ holds the answer.
 
 ```mermaid
 flowchart LR
-    subgraph DB ["SQLite (source of truth)"]
+    subgraph DB ["PostgreSQL (source of truth)"]
         direction TB
         T1[controls] & T2[issues] & T3[risks] & T4[risk_tags] & T5[risk_assignments] & T6[business_demography]
     end

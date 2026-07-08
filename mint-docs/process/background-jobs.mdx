@@ -63,6 +63,14 @@ sequenceDiagram
     A-->>C: pipeline output
 ```
 
+<Info>
+Under the hood each stage runs as a **dispatch → batch → finalize** state
+machine: item-heavy stages fan out into batches across the worker queues and
+make their LLM calls concurrently, then a finalize step aggregates and advances.
+This is the default **v2** orchestration (`PIPELINE_V2_ENABLED=true`); the legacy
+single-chain path remains behind `PIPELINE_V2_ENABLED=false`.
+</Info>
+
 ### Pipeline run status
 
 ```json
@@ -95,6 +103,13 @@ Full field reference: [Pipeline API](/api-reference/pipeline).
 `POST /controls/extract` and the generic `POST /jobs` (both global,
 non-org-scoped) follow the same three-beat pattern.
 
+<Info>
+These debug jobs now **execute on Celery workers**, via a generic `run_legacy_job`
+task routed by job type to the right queue (`LEGACY_JOBS_VIA_CELERY=true`), instead
+of running in-process in the API event loop — so they no longer compete with request
+handling. The jobs-table status contract (`GET /jobs/{jobId}`) is **unchanged**.
+</Info>
+
 <Steps>
   <Step title="Start">
     `POST` the action endpoint. It returns **immediately** with a job in
@@ -113,13 +128,13 @@ non-org-scoped) follow the same three-beat pattern.
 sequenceDiagram
     participant C as Client
     participant A as API
-    participant W as Worker
+    participant W as Celery worker
     participant DB as Database
 
-    C->>A: POST /…/run  (start action)
+    C->>A: POST /controls/extract | /jobs  (start action)
     A->>DB: create job (status=pending)
     A-->>C: { job_id, status: pending }
-    A->>W: dispatch BackgroundTask
+    A->>W: enqueue run_legacy_job (routed to queue by type)
     W->>DB: status=running
     loop until done
         W->>DB: write results incrementally
@@ -187,6 +202,8 @@ have been **removed**.
 The two still-existing legacy job types — `extract_controls` via
 `POST /controls/extract`, and any type via the generic `POST /jobs` — are
 **global** (not scoped to a `client_org_id`) and intended for debugging only.
+They now execute on Celery workers via the shared `run_legacy_job` task
+(`LEGACY_JOBS_VIA_CELERY=true`) rather than in the API process.
 
 ## Chained jobs
 
@@ -206,9 +223,19 @@ flowchart LR
 
 - A single failing item never kills a batch — scoring and extraction log the
   failure and continue with the rest.
+- **LLM calls are hardened**: every chat call retries transient errors (rate
+  limits, timeouts, 5xx) with jittered backoff under a per-call timeout, and
+  records latency / token / cost metrics. On exhaustion it falls back to the
+  deterministic heuristics below where a fallback exists, so the pipeline still
+  produces output.
 - When the LLM or Document Intelligence is unavailable, the pipeline falls back to
-  deterministic heuristics where a fallback exists, so the chain still produces
-  output.
+  deterministic heuristics where a fallback exists.
+- **Whole batches** retry at the Celery-task level (`CELERY_BATCH_MAX_RETRIES`,
+  default 3) and **dead-letter** to `<queue>.dlq` on exhaustion **without stalling
+  the run**; `scripts/replay_dlq.py` re-queues them once the cause is fixed.
+- A failed run never blocks the queue — a second ingest while a run is active is
+  accepted as a **`waiting`** run (`PIPELINE_MAX_QUEUED_RUNS`, default 10) and
+  auto-starts when the active one finishes.
 - Failures are captured in the job's `error` field for inspection.
 
 <Tip>

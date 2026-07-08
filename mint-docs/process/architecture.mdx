@@ -10,11 +10,19 @@ that hands work to background workers, and a database that tracks every step —
 you ingest once and the full risk pipeline runs without manual intervention.
 </Note>
 
-ISO Robot is a **FastAPI** service backed by a relational store, orchestrated by
-**Celery workers** over **RabbitMQ**, fronted by a React portal, and augmented by
-Azure AI services. The defining design choice is that **all heavy work runs
-asynchronously** — either as an automated pipeline chain or as individual
-background jobs for manual/debug use.
+ISO Robot is a **FastAPI** service backed by **PostgreSQL**, orchestrated by
+**Celery workers** over **RabbitMQ** (with Redis as the result backend), fronted
+by a React portal, and augmented by Azure AI services. The defining design choice
+is that **all heavy work runs asynchronously** — as an automated, **batched**
+pipeline that fans work out across the worker pool, with individual background
+jobs available for manual/debug use.
+
+<Note>
+Postgres is the default store (Docker Compose ships a `postgres` service and the
+containers' `DB_URI` is derived from the same `POSTGRES_*` variables). SQLite is
+still supported for local dev by leaving `DB_URI` empty, but Postgres is required
+for real worker concurrency — a single SQLite file serialises all writers.
+</Note>
 
 ## Component map
 
@@ -93,14 +101,21 @@ flowchart TD
   </Accordion>
 </AccordionGroup>
 
-## Celery task chain
+## Batched stage state machine
 
-The automated pipeline runs these stages in order. Control extraction parallelises
-per document; subsequent stages run org-wide once prerequisites are met.
+The automated pipeline advances one stage at a time, but each stage is a
+**dispatch → batch → finalize** state machine rather than a single task:
+
+1. **Dispatch** splits the stage's work into batches (per document, or per N
+   items) and records a step row for each.
+2. **Batch tasks** run those batches in parallel across the worker queues (a
+   Celery *chord*), each making its LLM calls with bounded concurrency.
+3. **Finalize** joins the batch results, writes a run-level summary, and advances
+   to the next stage.
 
 ```mermaid
 flowchart LR
-    A[ingest.register] --> B[extract_controls]
+    A[ingest_register] --> B[extract_controls]
     B --> C[issues_from_controls]
     C --> D[classify_issues]
     D --> E[generate_charts]
@@ -108,17 +123,32 @@ flowchart LR
     F --> G[score_risks]
     G --> H[risk_tagging]
     H --> J[risk_owner_assignment]
-    J --> I[pipeline.complete]
+    J --> I[pipeline complete]
 
     classDef stage fill:#0E7490,stroke:#22D3EE,color:#fff
     class A,B,C,D,E,F,G,H,I,J stage
 ```
 
 Each task wraps existing domain functions (`run_extract_controls_job`,
-`run_issues_from_controls_job`, `classify_issues_job`, `aggregate_classifications`,
-`run_risk_discovery`, `score_risks_job`, `run_risk_tagging_job`,
-`run_risk_owner_assignment_job`) — the business logic is unchanged; only
-dispatch and orchestration are new.
+`generate_issues_for_control_batch`, `classify_issues_job`,
+`aggregate_classifications`, `run_risk_discovery`, `score_risks_job`,
+`run_risk_tagging_job`, `run_risk_owner_assignment_job`) — the business logic is
+unchanged; the batched dispatch/orchestration is what's new. This is the default
+**v2** orchestration (`PIPELINE_V2_ENABLED=true`); the legacy single-chain path
+remains for rollback.
+
+## Resilience: retries, dead-letter queues, back-pressure
+
+- **Transient failures** (rate limits, timeouts, dropped connections) are retried
+  with jittered exponential backoff — both at the LLM-call level and, for whole
+  batches, at the Celery-task level (`CELERY_BATCH_MAX_RETRIES`, default 3).
+- **Exhausted batches** are published to a per-queue **dead-letter queue**
+  (`<queue>.dlq`) and recorded as failed **without stalling the run** — the stage
+  still finalises with a partial result. `scripts/replay_dlq.py` re-queues them
+  after the root cause is fixed.
+- **A failed run never blocks the queue**: the org's next `waiting` run auto-starts.
+- **Item-level isolation**: one bad document, control batch, or issue degrades to
+  a heuristic fallback (or is skipped) instead of failing the stage.
 
 ## Worker queues
 
@@ -162,11 +192,21 @@ relational DB is the source of truth for pipeline state.
     fallback when the model is unavailable.
   </Accordion>
   <Accordion title="Data stores" icon="database">
-    The relational database holds pipeline runs, document registry, controls,
-    issues, classifications, candidate risks, assessments, portal risks, and job
-    logs. Uploaded files live in per-organisation folders when
+    **PostgreSQL** holds pipeline runs, document registry, controls, issues,
+    classifications, candidate risks, assessments, portal risks, and job logs;
+    the schema is created/migrated automatically on API startup (Alembic).
+    **Milvus** holds the vector index for the chatbot, kept in sync incrementally
+    as each stage writes. Uploaded files live in per-organisation folders when
     `save_to_storage: true`. A seeded **risk library** is the catalogue that
     discovery matches against.
+  </Accordion>
+  <Accordion title="Observability" icon="chart-line">
+    Prometheus scrapes the API, Celery workers, and RabbitMQ; **Grafana**
+    dashboards cover API/Celery health, RabbitMQ queues, **LLM performance**
+    (latency, tokens, cost, retries), and **pipeline stages** (per-stage/batch
+    durations, dead-lettered batches). Structured logs flow to **Loki**; traces
+    to **Tempo**. Alerts fire on high LLM error/latency, stalled pipelines, and
+    dead-lettered batches.
   </Accordion>
 </AccordionGroup>
 

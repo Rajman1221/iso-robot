@@ -16,9 +16,10 @@ x-pipeline-worker: &pipeline-worker
     METRICS_PORT: ${METRICS_PORT:-9808}
     PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
     # Inside compose the app always uses the bundled `postgres` service. This
-    # literal intentionally overrides any host-oriented DB_URI in .env (which
-    # points at localhost for host-based dev).
-    DB_URI: postgresql+asyncpg://iso_robot:iso_robot@postgres:5432/iso_robot
+    # overrides any host-oriented DB_URI in .env (which points at localhost for
+    # host-based dev). It derives from the SAME POSTGRES_* vars the postgres
+    # service uses, so setting POSTGRES_PASSWORD in .env updates both together.
+    DB_URI: postgresql+asyncpg://${POSTGRES_USER:-iso_robot}:${POSTGRES_PASSWORD:-iso_robot}@postgres:5432/${POSTGRES_DB:-iso_robot}
     DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
     DB_POOL_MAX_OVERFLOW: ${DB_POOL_MAX_OVERFLOW:-5}
     CELERY_BROKER_URL: ${CELERY_BROKER_URL:-amqp://iso_robot:iso_robot@rabbitmq:5672//}

@@ -102,3 +102,71 @@ def stage_summary(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if stage not in PIPELINE_STAGES:
             ordered.append(entry)
     return ordered
+
+
+def _aggregate_stage_status(statuses: list[str]) -> str:
+    """Same priority as stage_summary: running > failed > completed > first."""
+    if any(s == "running" for s in statuses):
+        return "running"
+    if any(s == "failed" for s in statuses):
+        return "failed"
+    if statuses and all(s == "completed" for s in statuses):
+        return "completed"
+    if statuses and all(s == "skipped" for s in statuses):
+        return "skipped"
+    return statuses[0] if statuses else "pending"
+
+
+def _item_count(step: dict[str, Any]) -> Optional[int]:
+    result = step.get("result_json") or {}
+    if not isinstance(result, dict):
+        return None
+    item_ids = result.get("item_ids")
+    if isinstance(item_ids, list):
+        return len(item_ids)
+    return None
+
+
+def nested_stages(raw_steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group pipeline_document_steps into one stage object with slim batches[].
+
+    Batch rows (``batch_index IS NOT NULL``) appear under ``batches``.
+    Run-level finalize rows (``batch_index IS NULL``) are omitted from
+    ``batches`` but still contribute to the stage-level ``status``.
+    """
+    by_stage: dict[str, list[dict[str, Any]]] = {}
+    for step in raw_steps:
+        stage = str(step.get("stage") or "unknown")
+        by_stage.setdefault(stage, []).append(step)
+
+    ordered_stages: list[str] = [s for s in PIPELINE_STAGES if s in by_stage]
+    for stage in by_stage:
+        if stage not in PIPELINE_STAGES:
+            ordered_stages.append(stage)
+
+    result: list[dict[str, Any]] = []
+    for stage in ordered_stages:
+        rows = by_stage[stage]
+        batch_rows = [r for r in rows if r.get("batch_index") is not None]
+        batch_rows.sort(key=lambda r: (r.get("batch_index") is None, r.get("batch_index") or 0))
+
+        all_statuses = [str(r.get("status") or "pending") for r in rows]
+        batches = [
+            {
+                "batch_index": int(r["batch_index"]),
+                "status": str(r.get("status") or "pending"),
+                "item_count": _item_count(r),
+                "error": r.get("error"),
+            }
+            for r in batch_rows
+        ]
+        result.append(
+            {
+                "stage": stage,
+                "status": _aggregate_stage_status(all_statuses),
+                "batch_count": len(batches),
+                "failed_batches": sum(1 for b in batches if b["status"] == "failed"),
+                "batches": batches,
+            }
+        )
+    return result

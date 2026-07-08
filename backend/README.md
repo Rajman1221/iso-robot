@@ -288,7 +288,7 @@ With `OBSERVABILITY_ENABLED=true` (default in Docker Compose):
 - **API**: `GET /metrics` (Prometheus), `X-Request-Id` on every response, JSON structured logs, OpenTelemetry traces to Tempo.
 - **Celery workers**: per-worker `GET :9808/metrics`, task lifecycle metrics, publish/retry/failure counters, trace propagation via AMQP headers.
 - **RabbitMQ**: built-in Prometheus plugin on `:15692`; per-queue DLQs (`pipeline.*.dlq`) for rejected/expired messages.
-- **Pipeline progress**: `pipeline_runs` gauges + extended `GET /pipeline/status` fields (`stage_summary`).
+- **Pipeline progress**: `pipeline_runs` gauges + extended `GET /pipeline/status` fields (`stage_summary` + nested `stages` with slim `batches`).
 
 Start the full stack (includes Prometheus, Grafana, Tempo, Loki, Alloy):
 

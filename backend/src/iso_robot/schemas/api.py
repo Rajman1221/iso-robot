@@ -713,14 +713,28 @@ class IngestResponseData(BaseModel):
     status_url: str
 
 
-class PipelineStepStatus(BaseModel):
+class PipelineStageSummaryItem(BaseModel):
     stage: str
     status: str
-    document_id: Optional[str] = None
-    filename: Optional[str] = None
-    error: Optional[str] = None
+    document_count: int = 0
+    failed_count: int = 0
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+
+
+class PipelineBatchStatus(BaseModel):
+    batch_index: int
+    status: str
+    item_count: Optional[int] = None
+    error: Optional[str] = None
+
+
+class PipelineStageStatus(BaseModel):
+    stage: str
+    status: str
+    batch_count: int = 0
+    failed_batches: int = 0
+    batches: List[PipelineBatchStatus] = Field(default_factory=list)
 
 
 class PipelineStatusData(BaseModel):
@@ -736,12 +750,13 @@ class PipelineStatusData(BaseModel):
     processed_documents: int
     failed_documents: int
     progress_percent: int
+    stage_summary: List[PipelineStageSummaryItem] = Field(default_factory=list)
     celery_task_id: Optional[str] = None
     error: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     created_at: str
-    steps: List[PipelineStepStatus] = Field(default_factory=list)
+    stages: List[PipelineStageStatus] = Field(default_factory=list)
 
 
 class PipelineCancelData(BaseModel):

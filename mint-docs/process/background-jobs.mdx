@@ -87,9 +87,25 @@ single-chain path remains behind `PIPELINE_V2_ENABLED=false`.
   "total_documents": 5,
   "processed_documents": 3,
   "failed_documents": 0,
-  "steps": [
-    { "stage": "extract_controls", "status": "completed", "document_id": "uuid" },
-    { "stage": "score_risks", "status": "running", "document_id": null }
+  "stages": [
+    {
+      "stage": "extract_controls",
+      "status": "completed",
+      "batch_count": 3,
+      "failed_batches": 0,
+      "batches": [
+        { "batch_index": 0, "status": "completed", "item_count": 1, "error": null }
+      ]
+    },
+    {
+      "stage": "score_risks",
+      "status": "running",
+      "batch_count": 1,
+      "failed_batches": 0,
+      "batches": [
+        { "batch_index": 0, "status": "running", "item_count": 5, "error": null }
+      ]
+    }
   ]
 }
 ```

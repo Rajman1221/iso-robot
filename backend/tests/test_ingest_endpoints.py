@@ -267,7 +267,8 @@ async def test_pipeline_status_latest_run_reports_progress(client: TestClient, d
     assert data["status"] == "queued"
     assert data["current_stage"] == "ingest_register"
     assert data["progress_percent"] == 0
-    assert data["steps"] == []
+    assert data["stages"] == []
+    assert data["stage_summary"] == []
 
     # Explicit ?pipeline_run_id= must resolve the same run.
     by_id_resp = client.get(

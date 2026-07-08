@@ -43,6 +43,7 @@ from iso_robot.helpers.org_paths import org_base_dir
 from iso_robot.helpers.verify_cache import VerifiedContext
 from iso_robot.models.pipeline import RUN_STATUSES
 from iso_robot.observability.pipeline_progress import (
+    nested_stages,
     progress_percent,
     stage_summary,
 )
@@ -528,18 +529,6 @@ async def pipeline_status(
             )
 
     raw_steps = await step_repo.list_for_run(run["id"])
-    steps = [
-        {
-            "stage": s["stage"],
-            "status": s["status"],
-            "document_id": s.get("document_id"),
-            "filename": s.get("filename"),
-            "error": s.get("error"),
-            "started_at": s.get("started_at"),
-            "completed_at": s.get("completed_at"),
-        }
-        for s in raw_steps
-    ]
 
     return ApiResponse(
         status="success",
@@ -557,13 +546,13 @@ async def pipeline_status(
             "processed_documents": run["processed_documents"],
             "failed_documents": run["failed_documents"],
             "progress_percent": _progress_percent(run["status"], run["current_stage"]),
-            "stage_summary": stage_summary(steps),
+            "stage_summary": stage_summary(raw_steps),
             "celery_task_id": run.get("celery_root_task_id"),
             "error": run.get("error"),
             "started_at": run.get("started_at"),
             "completed_at": run.get("completed_at"),
             "created_at": run["created_at"],
-            "steps": steps,
+            "stages": nested_stages(raw_steps),
         },
     )
 

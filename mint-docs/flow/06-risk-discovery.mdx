@@ -36,22 +36,34 @@ with an LLM pass so the matches are both fast and context-aware.
 ## What happens
 
 First the library is **seeded once** from the POC catalogue. Then the
-`risk_discovery` job, for each issue, shortlists the most relevant library entries
-via BM25, asks the LLM to synthesise and group candidate risks, and records each
-candidate with its match status, library link, BM25 score, and source issue ids.
+`risk_discovery` job — scoped to **this run's organisation only** — shortlists the
+most relevant library entries for each issue via BM25, asks the LLM to synthesise
+and group candidate risks, and records each candidate with its match status,
+library link, BM25 score, and source issue ids. The BM25 corpus is built **once
+per run** (not rebuilt per candidate), and the per-candidate library-match LLM
+calls run **concurrently** (`DISCOVERY_LLM_CONCURRENCY`, default 2).
 
 ```mermaid
 flowchart TD
     A[POST risk-library/seed-from-poc<br/>one time] --> B[(Risk library)]
-    C[POST risk-discovery/run] --> D[Job: risk_discovery]
+    C[POST risk-discovery/run] --> D[Job: risk_discovery<br/>— org-scoped —]
     D --> E{For each issue}
-    E --> F[BM25 shortlist from library]
-    F --> G[LLM: synthesise + group candidate risks]
+    E --> F[BM25 shortlist from library<br/>corpus built once per run]
+    F --> G[LLM: synthesise + group candidate risks<br/>— DISCOVERY_LLM_CONCURRENCY concurrent —]
     G --> H[Match to library entry]
     B -.candidates ranked against.-> F
     H --> I[(Insert candidate_risks)]
     I --> J([Poll job → completed])
 ```
+
+<Info>
+**Org-scoped (correctness fix).** Discovery — and the chart aggregation in
+[Stage 05](/flow/05-classifications) — now operate only on the run's
+`client_org_id`. Previously discovery ran across **every** organisation's issues
+and cleared **all** orgs' candidate risks on each run, so concurrent runs for
+different organisations could overwrite each other. Both are now isolated per
+organisation.
+</Info>
 
 ## Inputs & outputs
 

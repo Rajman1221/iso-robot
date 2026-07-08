@@ -52,21 +52,41 @@ For each issue, the worker gathers the issue text and its linked controls, asks 
 LLM (as a senior ISO 31000 / ISO 27001 assessor) to rate likelihood, consequence,
 velocity, risk type, and each control's effectiveness, **validates** those against
 controlled vocabularies, then derives inherent risk, residual risk, and the
-recommended response from the matrices.
+recommended response from the matrices. Issues are scored in **batches of
+`SCORING_BATCH_SIZE`** (default 20) with up to `SCORING_LLM_CONCURRENCY` (5) LLM
+calls in flight — bounded-concurrent rather than strictly sequential, so the stage
+is roughly N× faster with identical per-issue output.
 
 ```mermaid
 flowchart TD
     A[POST risk-scoring/run] --> B[Job: score_risks]
     B --> C{For each issue}
     C --> D[Gather issue text + linked controls]
-    D --> E[LLM: likelihood, consequence, velocity,<br/>risk_type, control effectiveness]
+    D --> E[LLM: likelihood, consequence, velocity,<br/>risk_type, control effectiveness<br/>— SCORING_LLM_CONCURRENCY concurrent —]
     E --> F[Validate against controlled vocabularies]
     F --> G[Matrix: inherent risk]
     G --> H[Aggregate control effectiveness]
     H --> I[Matrix: residual risk]
     I --> J[Recommend response]
     J --> K[(Persist risk_assessment)]
+    K --> L[(Auto-promote scored issues → risks<br/>bulk, idempotent)]
 ```
+
+<Info>
+**Scored after every issue exists, then promoted.** Scoring runs only once **all**
+issues from **all** documents in the run have been generated — the batch join is
+the barrier — so ratings are computed over the complete set. It then
+**auto-promotes** scored issues into `risks` rows in **bulk**; the promotion is
+**idempotent**, so a retried or re-queued run never duplicates a risk. Milvus
+indexing for each batch is **bulk** (batched embeddings + one upsert), not one
+embed-and-upsert per issue.
+</Info>
+
+<Tip>
+The concurrency here is **asyncio**, not threads or processes: the LLM and
+embedding calls are network I/O, so Python's GIL is not the bottleneck —
+overlapping the waiting is exactly what speeds scoring up.
+</Tip>
 
 ## Inputs & outputs
 

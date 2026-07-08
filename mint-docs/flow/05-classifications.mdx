@@ -67,6 +67,17 @@ Run this **after** the `classify_issues` job from Stage 04 has completed. With n
 classified issues there is nothing to aggregate.
 </Warning>
 
+<Info>
+**How classification runs upstream.** The `classify_issues` stage (Stage 04) that
+produces these classifications now makes its per-issue LLM calls
+**bounded-concurrent** — batches of `CLASSIFY_BATCH_SIZE` (10) issues with
+`CLASSIFY_LLM_CONCURRENCY` (4) calls in flight — rather than strictly one at a
+time. Per-issue output is unchanged; the stage is roughly N× faster. Milvus
+indexing for each batch is **bulk** (batched embeddings + a single upsert) instead
+of one embed-and-upsert per issue. The aggregation snapshot produced here is
+**org-scoped**.
+</Info>
+
 ## Endpoints used
 
 | Method | Path | Auth | Purpose |

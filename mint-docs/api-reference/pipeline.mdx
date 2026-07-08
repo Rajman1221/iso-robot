@@ -49,8 +49,14 @@ POST /ingest/{clientOrgId}
 
 Accepts one or more **PDF** files, registers each by content hash (SHA-256)
 scoped to the organisation, creates a `pipeline_runs` row, and enqueues the
-full Celery canvas. Returns immediately with a `pipeline_run_id` — processing
-happens asynchronously.
+batched Celery pipeline. Returns immediately with a `pipeline_run_id` —
+processing happens asynchronously. Uploads are streamed to disk while hashing
+(constant memory per file), so large batches don't load every file into RAM.
+
+If the org already has an active run, this upload is accepted as a **`waiting`**
+run that auto-starts (FIFO per org) when the active one finishes — up to
+`PIPELINE_MAX_QUEUED_RUNS` (default 10). Set that to `0` to instead reject
+concurrent uploads with `409 PIPELINE_RUN_IN_PROGRESS`.
 
 ### Path parameters
 
@@ -136,7 +142,8 @@ curl -X POST "http://157.20.190.175:8000/api/v1/ingest/{clientOrgId}" \
 | 401 | `SESSION_INVALID` | External verification failed |
 | 403 | `FORBIDDEN` | `X-Org-Id` does not match `clientOrgId`, or identity mismatch |
 | 404 | `CLIENT_ORG_NOT_FOUND` | Unknown organisation |
-| 409 | `PIPELINE_RUN_IN_PROGRESS` | A run is already `queued`/`running` for this org — poll status until it finishes, or call **Cancel pipeline** |
+| 409 | `PIPELINE_RUN_IN_PROGRESS` | Only when `PIPELINE_MAX_QUEUED_RUNS=0` (queuing disabled) and a run is already active. Otherwise the upload is queued as a `waiting` run instead. |
+| 429 | `PIPELINE_QUEUE_FULL` | The org already has `PIPELINE_MAX_QUEUED_RUNS` waiting runs — try again once some complete |
 | 503 | `EXTERNAL_AUTH_UNAVAILABLE` | The verify backend is unreachable (fails closed) |
 
 <Warning>
@@ -222,13 +229,20 @@ curl "http://157.20.190.175:8000/api/v1/pipeline/status/{clientOrgId}" \
 }
 ```
 
-`steps[]` has one row per `(stage, document)` — org-level stages (everything
-after `extract_controls`) have `document_id: null`; `extract_controls` has one
-row per document, processed in parallel.
+`steps[]` rows track progress at batch granularity. Batched stages
+(`extract_controls`, `issues_from_controls`, `classify_issues`, `score_risks`)
+emit one row per batch — each carries a `batch_index` and the ids it processed —
+plus a run-level summary row (`batch_index: null`) written when the stage
+finishes. Single-shot org-wide stages (`generate_charts`, `risk_discovery`,
+`risk_tagging`, `risk_owner_assignment`) emit just the summary row.
 
-`stage_summary[]` rolls up `steps[]` by stage (document counts, failed counts,
-and earliest/latest timestamps). Use it for compact progress UIs; use `steps[]`
-for per-document detail.
+`stage_summary[]` rolls up `steps[]` by stage (batch/document counts, failed
+counts, and earliest/latest timestamps). Use it for compact progress UIs; use
+`steps[]` for per-batch detail.
+
+The response also carries `stage_totals` — per-stage batch counters
+(`{stage: {total_batches, completed_batches, failed_batches}}`) that feed the
+intra-stage portion of `progress_percent`.
 
 The response does **not** include elapsed-time or ETA fields — poll `status`,
 `current_stage`, and `steps[].status` instead.
@@ -237,18 +251,19 @@ The response does **not** include elapsed-time or ETA fields — poll `status`,
 
 | Value | Meaning |
 | --- | --- |
-| `queued` | Run created; canvas dispatched, waiting for a worker |
+| `waiting` | Accepted while another run was active; auto-starts (FIFO per org) once that run finishes |
+| `queued` | Run dispatched, waiting for a worker to pick it up |
 | `running` | At least one stage is actively processing |
-| `completed` | The canvas reached `pipeline_complete` for every queued document. Check `failed_documents` — a single document's extraction failure does **not** fail the whole run. |
-| `failed` | An unhandled error in any stage triggered the canvas's `link_error`, marking the whole run failed (see `error`) |
+| `completed` | The pipeline finished for every queued document. Check `failed_documents`/`stage_summary` — a single document or batch failure does **not** fail the whole run. |
+| `failed` | A **critical** stage (extraction or issue generation) had all of its batches fail, so nothing downstream could run (see `error`) |
 
 ### `current_stage` values
 
 | Stage | Description |
 | --- | --- |
 | `ingest_register` | Documents hashed, deduplicated, registered |
-| `extract_controls` | Azure DI + LLM control extraction (parallel chord, one task per document) |
-| `issues_from_controls` | Issue synthesis from the org's controls |
+| `extract_controls` | Azure DI + LLM control extraction (one batch task per document, run in parallel) |
+| `issues_from_controls` | Issue synthesis from this run's new controls (incremental; batched) |
 | `classify_issues` | PESTEL / SWOT / TVRA classification of this run's new issues |
 | `generate_charts` | Chart aggregation (`aggregate_classifications`) |
 | `risk_discovery` | BM25 + LLM matching to the risk library |
@@ -278,7 +293,8 @@ POST /pipeline/cancel/{clientOrgId}
 
 Marks the organisation's active (`queued` or `running`) pipeline run as `failed`
 with error `"Cancelled by user"`, cleans up ephemeral upload temp files when
-applicable, and releases the one-active-run-per-org lock so a new ingest can start.
+applicable, and releases the active-run slot. If the org has a `waiting` run
+queued behind it, that run auto-starts next.
 
 Use this when a run is stuck or you need to retry without waiting for Celery to finish.
 

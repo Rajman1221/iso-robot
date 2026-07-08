@@ -37,8 +37,11 @@ requirement, each traceable back to a source page.
 
 For each PDF, the worker extracts layout-aware text (with `[PAGE N]` markers),
 splits it into segments, and asks the LLM to emit **one control per clause /
-bullet / distinct obligation**. Controls are de-duplicated and committed
-incrementally, so they appear in the database while the job is still running.
+bullet / distinct obligation**. A document's segments are extracted
+**concurrently** (`EXTRACT_SEGMENT_CONCURRENCY`, default 3); its controls are then
+de-duplicated and written in a **single burst once all of that document's segments
+finish** — not incrementally per segment. Each document is its **own batch task**,
+so several documents' controls land in parallel.
 
 ```mermaid
 flowchart TD
@@ -50,11 +53,19 @@ flowchart TD
     E -- no --> G[Use DI text]
     F --> H[Chunk into segments]
     G --> H
-    H --> I[LLM: extract controls per segment]
+    H --> I[LLM: extract controls per segment<br/>— EXTRACT_SEGMENT_CONCURRENCY concurrent —]
     I --> J[De-duplicate + assign source_page]
-    J --> K[(Insert controls incrementally)]
-    K --> L([Poll job → completed])
+    J --> K[(Persist all controls in one burst<br/>per document)]
+    K --> M[Incrementally index only this<br/>document's controls in Milvus<br/>— bulk-embedded —]
+    M --> L([Poll job → completed])
 ```
+
+<Info>
+**Incremental vector indexing.** Extraction now indexes **only the new document's
+controls** into Milvus (bulk-embedded in one pass), instead of re-embedding the
+entire org's control corpus once per document — removing the old
+O(documents × whole-corpus) cost as an organisation accumulates controls.
+</Info>
 
 ## Inputs & outputs
 
@@ -78,7 +89,8 @@ flowchart TD
   <Step title="Worker reads each PDF">
     Azure Document Intelligence converts the PDF to layout text with `[PAGE N]`
     markers. If DI rejects an oversized file, the worker falls back to **page-batch**
-    DI or to **local** PDF text extraction so processing never simply stops.
+    DI (page-batches can run `DI_BATCH_CONCURRENCY` — default 2 — at a time) or to
+    **local** PDF text extraction so processing never simply stops.
   </Step>
   <Step title="LLM extracts controls">
     Each text segment is sent to the LLM with a strict instruction: emit one
@@ -91,7 +103,9 @@ flowchart TD
   </Step>
   <Step title="Poll and read">
     Poll `GET /jobs/{jobId}` until `completed`. Read results with
-    `GET /controls?client_org_id=…` — the list grows during the run.
+    `GET /controls?client_org_id=…` — the list grows **one document at a time** as
+    each document's batch task finishes (a document's controls appear together, not
+    trickled in per segment).
   </Step>
 </Steps>
 
@@ -140,6 +154,9 @@ later stages cluster them than to merge and lose detail.
 ## Resilience
 
 - **Oversized PDFs** are processed in page batches rather than failing outright.
+- **DI timeout** → each Document Intelligence call is bounded by
+  `AZURE_DI_TIMEOUT_SECONDS` (default 300), so a stuck call fails fast to the
+  fallback instead of hanging the worker.
 - **DI unavailable** → the worker uses local PDF text.
 - **LLM returns nothing** for a segment → a retry, then optionally a heuristic
   salvage pass, so usable controls still emerge.

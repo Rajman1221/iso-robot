@@ -27,16 +27,17 @@ assignment — runs automatically in the background via Celery workers.
 flowchart TD
     A[Client sends documents] --> B[POST /ingest/clientOrgId]
     B --> C{Active run already in progress?}
-    C -- yes --> REJECT[409 PIPELINE_RUN_IN_PROGRESS]
+    C -- yes --> WAIT[Accept as 'waiting' run<br/>auto-starts when the active one finishes]
     C -- no --> D{sha256 already seen for this org?}
+    WAIT --> D
     D -- "yes, no force_reprocess" --> SKIP[Skip duplicate]
     D -- "no, or force_reprocess" --> E[Register document + create pipeline_run]
-    E --> F[Extract controls<br/>— parallel per document —]
-    F --> G[Issues from controls]
-    G --> H[Classify issues<br/>PESTEL / SWOT / TVRA]
+    E --> F[Extract controls<br/>— one batch task per document —]
+    F --> G[Issues from controls<br/>— batched over this run's new controls —]
+    G --> H[Classify issues<br/>PESTEL / SWOT / TVRA — batched, concurrent —]
     H --> I[Generate charts]
     I --> J[Risk discovery vs library]
-    J --> K[Score risks<br/>+ auto-promote to Risk records]
+    J --> K[Score risks<br/>— batched — + auto-promote to Risk records]
     K --> L[Risk tagging]
     L --> R[Risk owner assignment<br/>+ auto-apply high-confidence owners]
     R --> M([Pipeline completed])
@@ -44,7 +45,7 @@ flowchart TD
 
     N[Client polls] --> O[GET /pipeline/status/clientOrgId]
     O --> P{status?}
-    P -- "queued / running" --> N
+    P -- "waiting / queued / running" --> N
     P -- completed --> Q[Read results via list endpoints]
 
     classDef api fill:#1e40af,stroke:#93c5fd,color:#fff
@@ -53,24 +54,43 @@ flowchart TD
     class F,G,H,I,J,K,L,R stage
 ```
 
+<Note>
+**Scale & concurrency:** every stage that works over many items **fans out into
+batches** across the worker pool, and the LLM-bound stages run multiple calls
+concurrently within each batch. Uploading 100 documents processes them in
+parallel (bounded by worker concurrency) rather than one-at-a-time. This is the
+default **v2** orchestration; the legacy single-chain path is still available via
+`PIPELINE_V2_ENABLED=false`.
+</Note>
+
 ## Pipeline stages (automatic)
 
-Each stage is a thin Celery task that reuses the **same domain functions** as
-the (now-removed) manual endpoints — the business logic did not change, only
-the orchestration. Extraction runs as a **Celery chord**: one task per
-document, all in parallel, before the chain continues.
+Each stage reuses the **same domain functions** as the (now-removed) manual
+endpoints. Orchestration is a **dispatch → batch → finalize** state machine: a
+stage's dispatcher splits its work into batches, fans them out across the worker
+queues (a Celery chord), then a finalize step aggregates the results and advances
+to the next stage. Item-heavy stages are batched; org-wide stages run once but
+make their LLM calls concurrently.
 
-| Order | Stage | What it produces |
-| --- | --- | --- |
-| 1 | **`ingest_register`** | Documents hashed + registered in `document_registry`, deduplicated per org |
-| 2 | **`extract_controls`** | Page-referenced `controls` from each new document (parallel chord) |
-| 3 | **`issues_from_controls`** | Synthesised `issues` for the org (re-derived from all of the org's controls each run) |
-| 4 | **`classify_issues`** | PESTEL / SWOT / TVRA `issue_classifications` for this run's new issues |
-| 5 | **`generate_charts`** | Aggregated chart snapshot via `aggregate_classifications` |
-| 6 | **`risk_discovery`** | `candidate_risks` matched to the seeded risk library |
-| 7 | **`score_risks`** | `risk_assessments` (inherent + residual) **and** auto-created `risks` rows |
-| 8 | **`risk_tagging`** | `risk_tags` applied automatically for high-confidence matches (`auto_apply=true`) |
-| 9 | **`risk_owner_assignment`** | `risk_owner_assignments` proposed against the org hierarchy, with high-confidence matches auto-applied to `risks.owner_user_id` (`auto_apply=true`) |
+| Order | Stage | What it produces | Fan-out |
+| --- | --- | --- | --- |
+| 1 | **`ingest_register`** | Documents hashed + registered in `document_registry`, deduplicated per org | — |
+| 2 | **`extract_controls`** | Page-referenced `controls` from each new document | one batch task **per document** |
+| 3 | **`issues_from_controls`** | Synthesised `issues` from **this run's new controls only** (incremental — existing issues are never deleted; duplicates suppressed by a content fingerprint) | batches of `ISSUES_CONTROLS_BATCH_SIZE` controls |
+| 4 | **`classify_issues`** | PESTEL / SWOT / TVRA `issue_classifications` for this run's new issues | batches of `CLASSIFY_BATCH_SIZE` issues, concurrent LLM calls |
+| 5 | **`generate_charts`** | Aggregated chart snapshot via `aggregate_classifications` (org-scoped) | single |
+| 6 | **`risk_discovery`** | `candidate_risks` matched to the seeded risk library (org-scoped) | single, concurrent matching |
+| 7 | **`score_risks`** | `risk_assessments` (inherent + residual) **and** auto-created `risks` rows | batches of `SCORING_BATCH_SIZE` issues |
+| 8 | **`risk_tagging`** | `risk_tags` applied automatically for high-confidence matches (`auto_apply=true`) | single, concurrent LLM calls |
+| 9 | **`risk_owner_assignment`** | `risk_owner_assignments` proposed against the org hierarchy, with high-confidence matches auto-applied to `risks.owner_user_id` (`auto_apply=true`) | single |
+
+<Info>
+**Incremental by default.** Re-ingesting adds only what the new documents
+produce — it never wipes existing controls, issues, or risks, and a deterministic
+`source_fingerprint` prevents duplicate issues across overlapping uploads. The
+legacy "re-derive issues from all of the org's controls each run" behaviour is
+still available via `ISSUES_GENERATION_SCOPE=all_controls_replace`.
+</Info>
 
 <Info>
 The chatbot's Milvus reindex remains a **separate, manual step** — it is not
@@ -91,7 +111,7 @@ starts. The hash is stored in `document_registry`, scoped to `(client_org_id, sh
 | Non-PDF file, or empty file | Rejected — returned with `"status": "rejected"` (only PDF extraction is supported) |
 | `save_to_storage: false` (default) | File written to a per-run temp directory for processing, then deleted once the run finishes |
 | `save_to_storage: true` | File persisted under the org's document folder permanently |
-| Another pipeline run already active for this org | Whole request rejected — `409 PIPELINE_RUN_IN_PROGRESS` |
+| Another pipeline run already active for this org | Accepted as a **`waiting`** run that auto-starts when the active one finishes (up to `PIPELINE_MAX_QUEUED_RUNS`, default 10). Set that to `0` to instead reject with `409 PIPELINE_RUN_IN_PROGRESS`; a full queue returns `429 PIPELINE_QUEUE_FULL` |
 
 <Tip>
 Use `save_to_storage: false` when you only need analysis output and do not want
@@ -241,14 +261,14 @@ sequenceDiagram
 
     C->>API: POST /ingest/{clientOrgId}  (external-backend token + X-headers)
     API->>DB: register hashes + create pipeline_run
-    API->>Q: enqueue canvas (chain + chord)
+    API->>Q: enqueue batched pipeline (dispatch → batch → finalize per stage)
     API-->>C: 202 pipeline_run_id
 
     loop until completed or failed
         C->>API: GET /pipeline/status/{clientOrgId}
         API->>DB: read pipeline_run + document steps
         API-->>C: status, current_stage, progress
-        Q->>DB: workers advance stages
+        Q->>DB: workers run batches + advance stages
     end
 
     C->>API: GET /issues, /controls, /risk-tags, …
@@ -259,20 +279,23 @@ sequenceDiagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: ingest accepted
+    [*] --> waiting: accepted behind an active run
+    [*] --> queued: ingest accepted (no active run)
+    waiting --> queued: previous run finished — auto-started
     queued --> running: worker picks up
-    running --> completed: canvas reaches pipeline_complete
-    running --> failed: any stage's link_error fires
+    running --> completed: pipeline reaches complete
+    running --> failed: a critical stage's batches all fail
     completed --> [*]
     failed --> [*]
 ```
 
 | `status` | Meaning |
 | --- | --- |
-| `queued` | Run created; canvas dispatched, not yet picked up by a worker |
+| `waiting` | Accepted while another run was active; auto-starts (FIFO per org) when that run finishes |
+| `queued` | Run dispatched, not yet picked up by a worker |
 | `running` | At least one stage is in progress |
-| `completed` | The canvas reached `pipeline_complete` — check `failed_documents` for per-document extraction failures, which do **not** fail the whole run |
-| `failed` | A stage raised an unhandled error and the canvas's `link_error` marked the run failed |
+| `completed` | The pipeline finished — check `failed_documents`/`stage_summary` for per-item failures, which do **not** fail the whole run |
+| `failed` | A **critical** stage (extraction or issue generation) had all of its batches fail, so nothing downstream could run |
 
 ## The legacy manual flow has been removed
 
@@ -282,6 +305,9 @@ The per-stage endpoints that used to exist (`POST /control-documents/extract/{or
 `POST /risk-assignments/run`) are **no longer available** — every stage now
 only runs as part of this automated pipeline. Two global (non-org-scoped)
 endpoints remain for low-level debugging: `POST /controls/extract` and the
-generic `POST /jobs`. See [Background Jobs](/process/background-jobs) for how
-job types map to pipeline stages, and [System Architecture](/process/architecture)
-for the Celery + RabbitMQ + Redis worker topology.
+generic `POST /jobs`. Those debug jobs now execute on Celery workers rather than
+in the API process (flag `LEGACY_JOBS_VIA_CELERY=true`), so they no longer
+compete with request handling. See [Background Jobs](/process/background-jobs)
+for how job types map to pipeline stages, and
+[System Architecture](/process/architecture) for the Postgres + Celery + RabbitMQ
++ Redis worker topology.

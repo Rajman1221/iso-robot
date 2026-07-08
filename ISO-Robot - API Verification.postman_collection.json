@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c5f74daa-904f-4817-9aaf-a1e7dbd344db",
     "name": "ISO-Robot - API Verification",
-    "description": "# ISO Robot API v1\n\n**Base URL:** `{{baseUrl}}` → `http://localhost:8000/api/v1`\n**Host root:** `{{stageURL}}` → `http://localhost:8000`\n\n## Quick start (automated pipeline — Docker)\n\n1. `docker compose up --build` (default `AUTH_MODE=self` — no extra auth env needed)\n2. **01 Auth → Login (Analyst)** — saves `token` and `clientOrgId`\n3. *(One-time if library empty)* **06 Risk Discovery → Seed risk library**\n4. If blocked by `409 PIPELINE_RUN_IN_PROGRESS`, run **Automated Pipeline → Cancel active pipeline run**\n5. **Automated Pipeline → Ingest documents** — attach `backend/fixtures/sample_control.pdf`, returns 202 + `pipelineRunId`\n6. **Automated Pipeline → Pipeline status (latest run)** — re-send until `status` = `completed`\n7. **11 Fetch Latest Data** + **10 Risk Owner Assignment** GETs to verify outputs\n\nRe-import this file from the **repo root** after updates — do not use an old Downloads copy.\n\n## Authentication (AUTH_MODE=self, default)\n\nISO Robot issues and validates its own JWT. **Every protected route — including the pipeline — uses the same login token.**\n\n| Route | Auth |\n|-------|------|\n| `POST /auth/login`, `GET /health` | **None** |\n| `POST /ingest/{clientOrgId}`, `GET /pipeline/status/{clientOrgId}`, `GET /pipeline/runs/{clientOrgId}`, `POST /pipeline/cancel/{clientOrgId}` | `Authorization: Bearer {{token}}` (from Login; user's org must match path) |\n| Everything else | `Authorization: Bearer {{token}}` |\n\nLogin sets: `token`, `clientOrgId`.\n\nLegacy `AUTH_MODE=external` (optional): pipeline instead requires `X-User-Id`, `X-User-Email`, `X-Org-Id` plus an external token — not used by this collection.\n\n## End-to-end flow\n\n```mermaid\nflowchart TD\n    A[Login] --> B[Ingest PDF]\n    B --> C[\"Poll pipeline status\"]\n    C --> D[Fetch Latest Data GETs]\n    D --> E[Owner recommendations]\n    E --> F[Chatbot optional]\n```\n\n## Error format\n\n```json\n{ \"detail\": \"Human message\", \"code\": \"ERROR_CODE\" }\n```\n\n| HTTP | code | Meaning |\n|------|------|---------|\n| 401 | UNAUTHORIZED | Missing/invalid Bearer header |\n| 403 | FORBIDDEN | Org mismatch |\n| 404 | PIPELINE_RUN_NOT_FOUND | No runs yet or bad pipeline_run_id |\n| 409 | PIPELINE_RUN_IN_PROGRESS | Another ingest still active |\n\n## Remaining job endpoints\n\nChatbot reindex (`POST /chatbot/reindex`) and Reference/Legacy debug endpoints still use the background job pattern: start → poll `GET /jobs/{jobId}`.\n",
+    "description": "# ISO Robot API v1\n\n**Base URL:** `{{baseUrl}}` \u2192 `http://localhost:8000/api/v1`\n**Host root:** `{{stageURL}}` \u2192 `http://localhost:8000`\n\n## Quick start (automated pipeline \u2014 Docker)\n\n1. `docker compose up --build` (default `AUTH_MODE=self` \u2014 no extra auth env needed)\n2. **01 Auth \u2192 Login (Analyst)** \u2014 saves `token` and `clientOrgId`\n3. *(One-time if library empty)* **06 Risk Discovery \u2192 Seed risk library**\n4. If blocked by `409 PIPELINE_RUN_IN_PROGRESS`, run **Automated Pipeline \u2192 Cancel active pipeline run**\n5. **Automated Pipeline \u2192 Ingest documents** \u2014 attach `backend/fixtures/sample_control.pdf`, returns 202 + `pipelineRunId`\n6. **Automated Pipeline \u2192 Pipeline status (latest run)** \u2014 re-send until `status` = `completed`\n7. **11 Fetch Latest Data** + **10 Risk Owner Assignment** GETs to verify outputs\n\nRe-import this file from the **repo root** after updates \u2014 do not use an old Downloads copy.\n\n## Authentication (AUTH_MODE=self, default)\n\nISO Robot issues and validates its own JWT. **Every protected route \u2014 including the pipeline \u2014 uses the same login token.**\n\n| Route | Auth |\n|-------|------|\n| `POST /auth/login`, `GET /health` | **None** |\n| `POST /ingest/{clientOrgId}`, `GET /pipeline/status/{clientOrgId}`, `GET /pipeline/runs/{clientOrgId}`, `POST /pipeline/cancel/{clientOrgId}` | `Authorization: Bearer {{token}}` (from Login; user's org must match path) |\n| Everything else | `Authorization: Bearer {{token}}` |\n\nLogin sets: `token`, `clientOrgId`.\n\nLegacy `AUTH_MODE=external` (optional): pipeline instead requires `X-User-Id`, `X-User-Email`, `X-Org-Id` plus an external token \u2014 not used by this collection.\n\n## End-to-end flow\n\n```mermaid\nflowchart TD\n    A[Login] --> B[Ingest PDF]\n    B --> C[\"Poll pipeline status\"]\n    C --> D[Fetch Latest Data GETs]\n    D --> E[Owner recommendations]\n    E --> F[Chatbot optional]\n```\n\n## Error format\n\n```json\n{ \"detail\": \"Human message\", \"code\": \"ERROR_CODE\" }\n```\n\n| HTTP | code | Meaning |\n|------|------|---------|\n| 401 | UNAUTHORIZED | Missing/invalid Bearer header |\n| 403 | FORBIDDEN | Org mismatch |\n| 404 | PIPELINE_RUN_NOT_FOUND | No runs yet or bad pipeline_run_id |\n| 409 | PIPELINE_RUN_IN_PROGRESS | Another ingest still active |\n\n## Remaining job endpoints\n\nChatbot reindex (`POST /chatbot/reindex`) and Reference/Legacy debug endpoints still use the background job pattern: start \u2192 poll `GET /jobs/{jobId}`.\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "25305867"
   },
@@ -33,7 +33,7 @@
                 "health"
               ]
             },
-            "description": "## Response 200\n`{ \"status\": \"ok\" }` — no auth."
+            "description": "## Response 200\n`{ \"status\": \"ok\" }` \u2014 no auth."
           },
           "response": []
         },
@@ -71,7 +71,7 @@
       "name": "01 Auth",
       "item": [
         {
-          "name": "Login (Analyst — QOC)",
+          "name": "Login (Analyst \u2014 QOC)",
           "event": [
             {
               "listen": "test",
@@ -125,7 +125,7 @@
                 "login"
               ]
             },
-            "description": "## Purpose\nAuthenticate analyst user. **Run first.** Public — no Bearer token.\n\n## Request\n```json\n{ \"username\": \"email\", \"password\": \"...\" }\n```\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"message\": \"Login successful\",\n  \"data\": {\n    \"access_token\": \"<JWT>\",\n    \"user_id\": \"uuid\",\n    \"client_org_id\": \"uuid\",\n    \"client_org_name\": \"...\",\n    \"tenant_id\": \"...\",\n    \"folders\": { \"control_documents_folder\": \"...\", ... },\n    \"roles\": [\"analyst\"]\n  }\n}\n```\n\n## Other responses\n| Status | code |\n|--------|------|\n| 401 | AUTH_FAILED |\n| 403 | UNAUTHORIZED (disabled account) |\n| 404 | CLIENT_ORG_NOT_FOUND |\n\n## Flow\nSaves `token` + `clientOrgId` to collection variables."
+            "description": "## Purpose\nAuthenticate analyst user. **Run first.** Public \u2014 no Bearer token.\n\n## Request\n```json\n{ \"username\": \"email\", \"password\": \"...\" }\n```\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"message\": \"Login successful\",\n  \"data\": {\n    \"access_token\": \"<JWT>\",\n    \"user_id\": \"uuid\",\n    \"client_org_id\": \"uuid\",\n    \"client_org_name\": \"...\",\n    \"tenant_id\": \"...\",\n    \"folders\": { \"control_documents_folder\": \"...\", ... },\n    \"roles\": [\"analyst\"]\n  }\n}\n```\n\n## Other responses\n| Status | code |\n|--------|------|\n| 401 | AUTH_FAILED |\n| 403 | UNAUTHORIZED (disabled account) |\n| 404 | CLIENT_ORG_NOT_FOUND |\n\n## Flow\nSaves `token` + `clientOrgId` to collection variables."
           },
           "response": []
         },
@@ -186,7 +186,7 @@
                 "login"
               ]
             },
-            "description": "## Purpose\n\nAdmin login for org creation and cross-org ops.\n\nSame request/response shape as Analyst login.\n\n## Other responses\n\n401 AUTH_FAILED · 403 disabled · 404 org not found"
+            "description": "## Purpose\n\nAdmin login for org creation and cross-org ops.\n\nSame request/response shape as Analyst login.\n\n## Other responses\n\n401 AUTH_FAILED \u00b7 403 disabled \u00b7 404 org not found"
           },
           "response": []
         },
@@ -223,7 +223,7 @@
                 "me"
               ]
             },
-            "description": "## Purpose\nReturn logged-in user profile from JWT.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": { \"id\", \"email\", \"full_name\", \"client_org_id\", \"role\", \"created_at\" }\n}\n```\n401 UNAUTHORIZED · 401 SESSION_INVALID"
+            "description": "## Purpose\nReturn logged-in user profile from JWT.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": { \"id\", \"email\", \"full_name\", \"client_org_id\", \"role\", \"created_at\" }\n}\n```\n401 UNAUTHORIZED \u00b7 401 SESSION_INVALID"
           },
           "response": []
         },
@@ -343,7 +343,7 @@
                 "{{clientOrgId}}"
               ]
             },
-            "description": "## Purpose\nThe **single entry point** for the automated pipeline. Uploading here automatically runs: control extraction → issue synthesis → classification → chart aggregation → risk discovery → risk scoring (+ auto-promotion to `risks`) → risk tagging (`auto_apply: true`) → risk owner assignment (`auto_apply: true`).\n\n## PDF file\nUse Postman's file picker to attach a PDF. For Docker/local testing, select `backend/fixtures/sample_control.pdf` from your repo clone.\n\n## Docker note\nEphemeral uploads (`save_to_storage=false`) require `PIPELINE_INGEST_TEMP_DIR=/app/backend/data/ingest-tmp` on api + workers (set in docker-compose).\n\n## Auth\n`Authorization: Bearer {{token}}` from **01 Auth → Login**. The logged-in user's `client_org_id` must match `{{clientOrgId}}` in the path (403 if not).\n\n## Then\nPoll **Pipeline status (latest run)** until `status` = `completed` or `failed`."
+            "description": "## Purpose\nThe **single entry point** for the automated pipeline. Uploading here automatically runs: control extraction \u2192 issue synthesis \u2192 classification \u2192 chart aggregation \u2192 risk discovery \u2192 risk scoring (+ auto-promotion to `risks`) \u2192 risk tagging (`auto_apply: true`) \u2192 risk owner assignment (`auto_apply: true`).\n\n## PDF file\nUse Postman's file picker to attach a PDF. For Docker/local testing, select `backend/fixtures/sample_control.pdf` from your repo clone.\n\n## Docker note\nEphemeral uploads (`save_to_storage=false`) require `PIPELINE_INGEST_TEMP_DIR=/app/backend/data/ingest-tmp` on api + workers (set in docker-compose).\n\n## Auth\n`Authorization: Bearer {{token}}` from **01 Auth \u2192 Login**. The logged-in user's `client_org_id` must match `{{clientOrgId}}` in the path (403 if not).\n\n## Then\nPoll **Pipeline status (latest run)** until `status` = `completed` or `failed`."
           },
           "response": []
         },
@@ -394,7 +394,7 @@
                 "{{clientOrgId}}"
               ]
             },
-            "description": "## Purpose\nMark the org's active (`queued`/`running`) pipeline run as **failed** and release the one-active-run-per-org lock.\n\nUse when a run is stuck (e.g. after a worker crash) or you need to retry ingest without waiting.\n\n## Auth\nSame as **Ingest documents**: `Authorization: Bearer {{token}}` from Login.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"pipeline_run_id\": \"...\",\n    \"status\": \"failed\",\n    \"error\": \"Cancelled by user\"\n  }\n}\n```\n\n## Errors\n404 `NO_ACTIVE_PIPELINE_RUN` — nothing to cancel\n\n## Then\nRun **Ingest documents** again."
+            "description": "## Purpose\nMark the org's active (`queued`/`running`) pipeline run as **failed** and release the one-active-run-per-org lock.\n\nUse when a run is stuck (e.g. after a worker crash) or you need to retry ingest without waiting.\n\n## Auth\nSame as **Ingest documents**: `Authorization: Bearer {{token}}` from Login.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"pipeline_run_id\": \"...\",\n    \"status\": \"failed\",\n    \"error\": \"Cancelled by user\"\n  }\n}\n```\n\n## Errors\n404 `NO_ACTIVE_PIPELINE_RUN` \u2014 nothing to cancel\n\n## Then\nRun **Ingest documents** again."
           },
           "response": []
         },
@@ -420,7 +420,7 @@
                   "  if (run.duration_seconds != null) console.log('    duration_seconds:', run.duration_seconds);",
                   "});",
                   "if (d.pagination && d.pagination.has_more) {",
-                  "  console.log('More runs available — increase offset and re-send.');",
+                  "  console.log('More runs available \u2014 increase offset and re-send.');",
                   "}"
                 ]
               }
@@ -467,7 +467,7 @@
                 {
                   "key": "limit",
                   "value": "20",
-                  "description": "Page size (1–100)."
+                  "description": "Page size (1\u2013100)."
                 },
                 {
                   "key": "offset",
@@ -476,7 +476,7 @@
                 }
               ]
             },
-            "description": "## Purpose\nList all pipeline runs for this organisation with aggregate counts and per-run metadata. Use for dashboards showing how many runs are active, queued, waiting, completed, or failed.\n\nFor per-stage detail on a single run, follow each item's `status_url` or use **Pipeline status (specific run)**.\n\n## Auth\nSame as **Ingest documents**: `Authorization: Bearer {{token}}` from Login.\n\n## Query params\n| Param | Default | Description |\n| --- | --- | --- |\n| `status` | — | Optional filter: `queued`, `waiting`, `running`, `completed`, `failed` |\n| `limit` | `20` | Page size (1–100) |\n| `offset` | `0` | Pagination offset |\n\nRuns are ordered newest-first. The `summary` block always reflects **all** runs for the org, regardless of filter/pagination.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"message\": \"Pipeline runs retrieved\",\n  \"data\": {\n    \"client_org_id\": \"...\",\n    \"summary\": {\n      \"total_runs\": 14,\n      \"running\": 1,\n      \"queued\": 0,\n      \"waiting\": 2,\n      \"completed\": 10,\n      \"failed\": 1,\n      \"active_now\": 3\n    },\n    \"pagination\": { \"limit\": 20, \"offset\": 0, \"total\": 14, \"has_more\": false },\n    \"runs\": [\n      {\n        \"pipeline_run_id\": \"uuid\",\n        \"status\": \"completed\",\n        \"current_stage\": \"complete\",\n        \"progress_percent\": 100,\n        \"total_documents\": 1,\n        \"new_documents\": 1,\n        \"skipped_duplicate_documents\": 0,\n        \"processed_documents\": 0,\n        \"failed_documents\": 0,\n        \"documents\": [\n          {\n            \"document_id\": \"...\",\n            \"document_registry_id\": \"...\",\n            \"filename\": \"policy.pdf\"\n          }\n        ],\n        \"celery_task_id\": \"...\",\n        \"queue_position\": null,\n        \"error\": null,\n        \"started_at\": \"...\",\n        \"completed_at\": \"...\",\n        \"created_at\": \"...\",\n        \"duration_seconds\": 425,\n        \"status_url\": \"/api/v1/pipeline/status/{clientOrgId}?pipeline_run_id=uuid\"\n      }\n    ]\n  }\n}\n```\n\n`duration_seconds` is the whole pipeline run wall-clock time (`completed_at - started_at`), not a single stage.\n\n`queue_position` is set only for `waiting` runs (1-based FIFO position behind the active run).\n\n## Errors\n400 `INVALID_PIPELINE_STATUS` · 401/403 (same as ingest) · 404 `CLIENT_ORG_NOT_FOUND`"
+            "description": "## Purpose\nList all pipeline runs for this organisation with aggregate counts and per-run metadata. Use for dashboards showing how many runs are active, queued, waiting, completed, or failed.\n\nFor per-stage detail on a single run, follow each item's `status_url` or use **Pipeline status (specific run)**.\n\n## Auth\nSame as **Ingest documents**: `Authorization: Bearer {{token}}` from Login.\n\n## Query params\n| Param | Default | Description |\n| --- | --- | --- |\n| `status` | \u2014 | Optional filter: `queued`, `waiting`, `running`, `completed`, `failed` |\n| `limit` | `20` | Page size (1\u2013100) |\n| `offset` | `0` | Pagination offset |\n\nRuns are ordered newest-first. The `summary` block always reflects **all** runs for the org, regardless of filter/pagination.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"message\": \"Pipeline runs retrieved\",\n  \"data\": {\n    \"client_org_id\": \"...\",\n    \"summary\": {\n      \"total_runs\": 14,\n      \"running\": 1,\n      \"queued\": 0,\n      \"waiting\": 2,\n      \"completed\": 10,\n      \"failed\": 1,\n      \"active_now\": 3\n    },\n    \"pagination\": { \"limit\": 20, \"offset\": 0, \"total\": 14, \"has_more\": false },\n    \"runs\": [\n      {\n        \"pipeline_run_id\": \"uuid\",\n        \"status\": \"completed\",\n        \"current_stage\": \"complete\",\n        \"progress_percent\": 100,\n        \"total_documents\": 1,\n        \"new_documents\": 1,\n        \"skipped_duplicate_documents\": 0,\n        \"processed_documents\": 0,\n        \"failed_documents\": 0,\n        \"documents\": [\n          {\n            \"document_id\": \"...\",\n            \"document_registry_id\": \"...\",\n            \"filename\": \"policy.pdf\"\n          }\n        ],\n        \"celery_task_id\": \"...\",\n        \"queue_position\": null,\n        \"error\": null,\n        \"started_at\": \"...\",\n        \"completed_at\": \"...\",\n        \"created_at\": \"...\",\n        \"duration_seconds\": 425,\n        \"status_url\": \"/api/v1/pipeline/status/{clientOrgId}?pipeline_run_id=uuid\"\n      }\n    ]\n  }\n}\n```\n\n`duration_seconds` is the whole pipeline run wall-clock time (`completed_at - started_at`), not a single stage.\n\n`queue_position` is set only for `waiting` runs (1-based FIFO position behind the active run).\n\n## Errors\n400 `INVALID_PIPELINE_STATUS` \u00b7 401/403 (same as ingest) \u00b7 404 `CLIENT_ORG_NOT_FOUND`"
           },
           "response": []
         },
@@ -514,7 +514,7 @@
                 "{{clientOrgId}}"
               ]
             },
-            "description": "## Purpose\nUnified progress for this org's **most recent** ingest run (no `pipeline_run_id` query param). Auth: `Authorization: Bearer {{token}}` from Login.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"client_org_id\": \"...\",\n    \"pipeline_run_id\": \"uuid\",\n    \"status\": \"queued|running|completed|failed\",\n    \"current_stage\": \"ingest_register|extract_controls|issues_from_controls|classify_issues|generate_charts|risk_discovery|score_risks|risk_tagging|risk_owner_assignment|complete\",\n    \"save_to_storage\": false,\n    \"force_reprocess\": false,\n    \"total_documents\": 1,\n    \"new_documents\": 1,\n    \"skipped_duplicate_documents\": 0,\n    \"processed_documents\": 1,\n    \"failed_documents\": 0,\n    \"progress_percent\": 100,\n    \"celery_task_id\": \"...\",\n    \"error\": null,\n    \"started_at\": \"...\",\n    \"completed_at\": \"...\",\n    \"created_at\": \"...\",\n    \"steps\": [\n      { \"stage\": \"extract_controls\", \"status\": \"completed\", \"document_id\": \"...\", \"filename\": \"policy.pdf\", \"error\": null, \"started_at\": \"...\", \"completed_at\": \"...\" }\n    ]\n  }\n}\n```\n\n## Errors\n401/403 (same as ingest) · 404 CLIENT_ORG_NOT_FOUND · 404 PIPELINE_RUN_NOT_FOUND (no runs yet for this org — POST /ingest first)"
+            "description": "## Purpose\nUnified progress for this org's **most recent** ingest run (no `pipeline_run_id` query param). Auth: `Authorization: Bearer {{token}}` from Login.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": {\n    \"client_org_id\": \"...\",\n    \"pipeline_run_id\": \"uuid\",\n    \"status\": \"queued|running|completed|failed\",\n    \"current_stage\": \"ingest_register|extract_controls|issues_from_controls|classify_issues|generate_charts|risk_discovery|score_risks|risk_tagging|risk_owner_assignment|complete\",\n    \"save_to_storage\": false,\n    \"force_reprocess\": false,\n    \"total_documents\": 1,\n    \"new_documents\": 1,\n    \"skipped_duplicate_documents\": 0,\n    \"processed_documents\": 1,\n    \"failed_documents\": 0,\n    \"progress_percent\": 100,\n    \"celery_task_id\": \"...\",\n    \"error\": null,\n    \"started_at\": \"...\",\n    \"completed_at\": \"...\",\n    \"created_at\": \"...\",\n    \"steps\": [\n      { \"stage\": \"extract_controls\", \"status\": \"completed\", \"document_id\": \"...\", \"filename\": \"policy.pdf\", \"error\": null, \"started_at\": \"...\", \"completed_at\": \"...\" }\n    ]\n  }\n}\n```\n\n## Errors\n401/403 (same as ingest) \u00b7 404 CLIENT_ORG_NOT_FOUND \u00b7 404 PIPELINE_RUN_NOT_FOUND (no runs yet for this org \u2014 POST /ingest first)"
           },
           "response": [],
           "event": [
@@ -587,7 +587,7 @@
                 }
               ]
             },
-            "description": "## Purpose\nSame as **Pipeline status (latest run)**, but pinned to one run via `?pipeline_run_id=` — `{{pipelineRunId}}` is captured automatically by the **Ingest documents** request's test script. Useful once a second ingest has started (so 'latest' would point elsewhere) or to re-check a historical run.\n\n404 PIPELINE_RUN_NOT_FOUND if the run doesn't belong to `{{clientOrgId}}`."
+            "description": "## Purpose\nSame as **Pipeline status (latest run)**, but pinned to one run via `?pipeline_run_id=` \u2014 `{{pipelineRunId}}` is captured automatically by the **Ingest documents** request's test script. Useful once a second ingest has started (so 'latest' would point elsewhere) or to re-check a historical run.\n\n404 PIPELINE_RUN_NOT_FOUND if the run doesn't belong to `{{clientOrgId}}`."
           },
           "response": [],
           "event": [
@@ -614,7 +614,7 @@
           ]
         }
       ],
-      "description": "**Recommended path — replaces manual Steps 3-10.** One authenticated upload runs the entire workflow (control extraction → issues → classification → charts → risk discovery → scoring with auto-promotion → tagging with auto-apply → owner assignment with auto-apply) end-to-end via Celery/RabbitMQ/Redis.\n\n**Auth:** `Authorization: Bearer {{token}}` from **01 Auth → Login** (default `AUTH_MODE=self`). The token's org must match `{{clientOrgId}}` in the path.\n\n**Quick flow:** Login → Ingest (attach PDF) → Poll status until `completed` → 11 Fetch Latest Data.\n\n**Dashboard:** Use **List pipeline runs** to see all runs (queued, running, waiting, completed, failed) with document names and timing.",
+      "description": "**Recommended path \u2014 replaces manual Steps 3-10.** One authenticated upload runs the entire workflow (control extraction \u2192 issues \u2192 classification \u2192 charts \u2192 risk discovery \u2192 scoring with auto-promotion \u2192 tagging with auto-apply \u2192 owner assignment with auto-apply) end-to-end via Celery/RabbitMQ/Redis.\n\n**Auth:** `Authorization: Bearer {{token}}` from **01 Auth \u2192 Login** (default `AUTH_MODE=self`). The token's org must match `{{clientOrgId}}` in the path.\n\n**Quick flow:** Login \u2192 Ingest (attach PDF) \u2192 Poll status until `completed` \u2192 11 Fetch Latest Data.\n\n**Dashboard:** Use **List pipeline runs** to see all runs (queued, running, waiting, completed, failed) with document names and timing.",
       "event": [
         {
           "listen": "prerequest",
@@ -622,10 +622,10 @@
             "type": "text/javascript",
             "exec": [
               "if (!pm.collectionVariables.get('clientOrgId')) {",
-              "  console.warn('Run 01 Auth → Login first — clientOrgId is empty.');",
+              "  console.warn('Run 01 Auth \u2192 Login first \u2014 clientOrgId is empty.');",
               "}",
               "if (!pm.collectionVariables.get('token')) {",
-              "  console.warn('Run 01 Auth → Login first — token is empty.');",
+              "  console.warn('Run 01 Auth \u2192 Login first \u2014 token is empty.');",
               "}"
             ]
           }
@@ -780,7 +780,7 @@
                 "upload"
               ]
             },
-            "description": "## Purpose\nMultipart upload of PDF/DOCX/XLSX/TXT to org folder.\n\n## Form fields\n`client_org_id`, `document_type`, `file`\n\n## Response 200\nApiResponse with new ControlDocumentResponse in `data`.\n400 FILE_UPLOAD_FAILED · 404 CLIENT_ORG_NOT_FOUND"
+            "description": "## Purpose\nMultipart upload of PDF/DOCX/XLSX/TXT to org folder.\n\n## Form fields\n`client_org_id`, `document_type`, `file`\n\n## Response 200\nApiResponse with new ControlDocumentResponse in `data`.\n400 FILE_UPLOAD_FAILED \u00b7 404 CLIENT_ORG_NOT_FOUND"
           },
           "response": []
         },
@@ -818,7 +818,7 @@
                 "{{clientOrgId}}"
               ]
             },
-            "description": "## Purpose\nQuick counts — re-run while extract job runs.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": { \"client_org_id\": \"...\", \"documents\": 3, \"controls\": 47 }\n}\n```"
+            "description": "## Purpose\nQuick counts \u2014 re-run while extract job runs.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": { \"client_org_id\": \"...\", \"documents\": 3, \"controls\": 47 }\n}\n```"
           },
           "response": []
         },
@@ -886,7 +886,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"client_org_id\": \"{{clientOrgId}}\",\n    \"business_demography\": {\n        \"industry\": \"Sports Governance\",\n        \"sub_industry\": \"Olympic movement, athlete development, major sports event hosting and coordination\",\n        \"employee_count\": \"610\",\n        \"annual_revenue\": null,\n        \"headquarters_country\": \"Qatar\",\n        \"headquarters_city\": \"Doha\",\n        \"ownership_type\": \"Public Sports Institution\",\n        \"regulatory_region\": \"GCC\",\n        \"website\": \"www.olympic.qa\",\n        \"locations\": [],\n        \"processes\": [],\n        \"regulatory_frameworks\": [],\n        \"notes\": null,\n        \"function_catalog\": [\n            {\n                \"Function ID\": \"F01\",\n                \"Function\": \"Executive Leadership & Board Governance\",\n                \"Short Description\": \"Provides enterprise direction, approvals and accountability.\",\n                \"Core Responsibilities\": \"Strategy approval; risk appetite; policy oversight; executive decisions; escalation management.\",\n                \"Typical Sub-functions\": \"Board office; Secretary General office; executive committees\",\n                \"Key Processes / Records\": \"Board minutes; strategy approvals; risk appetite; policy approvals\",\n                \"Risk Domains Supported\": \"Strategic; reputation; governance; enterprise risk\",\n                \"Typical Risk Owner\": \"President / Secretary General\",\n                \"Typical Control Owner\": \"Executive office / governance secretary\",\n                \"Assignment Logic\": \"Assign cross-functional or unowned Tier-1 risks here after first-pass functional matching fails.\",\n                \"Criticality\": \"Tier 1\"\n            }\n        ],\n        \"employee_hierarchy\": [\n            {\n                \"Role ID\": \"R001\",\n                \"Parent Role ID\": null,\n                \"Hierarchy Level\": \"1\",\n                \"Function ID\": \"F01\",\n                \"Business Function\": \"Executive Leadership & Board Governance\",\n                \"Template Designation\": \"President / Chairperson\",\n                \"Role Type\": \"Executive\",\n                \"Region / Scope\": \"Enterprise\",\n                \"Role Description\": \"Sets strategic direction, represents the organization externally and chairs highest-level governance decisions.\",\n                \"Risk Workflow Role\": \"Executive Sponsor\",\n                \"Likely Risks Owned / Assigned\": \"Enterprise reputation, Olympic Movement alignment, major public commitments, strategic risk acceptance\",\n                \"Decision Rights / Approval Authority\": \"Final approval for Tier-1 enterprise risk acceptance and public escalation\",\n                \"Primary Risk Tags\": \"enterprise; reputation; governance; strategy\",\n                \"Escalation Role ID\": \"R002\"\n            }\n        ],\n        \"risk_assignment_rules\": [\n            {\n                \"Rule ID\": \"AR01\",\n                \"Risk / Issue Domain\": \"Strategic objective / KPI risk\",\n                \"Trigger Keywords / Signals\": \"strategy, KPI, objective, benefits, transformation, target miss, dashboard exception\",\n                \"Primary Function ID\": \"F02\",\n                \"Primary Assignment Role ID\": \"R003\",\n                \"Backup Role ID\": \"R004\",\n                \"Escalation Role ID\": \"R002\",\n                \"Default Criticality\": \"High\",\n                \"Assignment Rationale\": \"Strategic risks should be owned by strategy/corporate performance, with executive escalation for enterprise impact.\",\n                \"Suggested Tags\": \"strategy; KPI; benefits; transformation\",\n                \"Internal Data Needed\": \"Objective ID, KPI ID, target, actual, variance, programme link\",\n                \"Status\": \"Template\"\n            }\n        ]\n    }\n}",
+              "raw": "{\n    \"client_org_id\": \"{{clientOrgId}}\",\n    \"business_demography\": {\n        \"industry\": \"Sports Governance\",\n        \"sub_industry\": \"Olympic movement, athlete development, major sports event hosting and coordination\",\n        \"employee_count\": \"610\",\n        \"annual_revenue\": null,\n        \"headquarters_country\": \"Qatar\",\n        \"headquarters_city\": \"Doha\",\n        \"ownership_type\": \"Public Sports Institution\",\n        \"regulatory_region\": \"GCC\",\n        \"website\": \"www.olympic.qa\",\n        \"locations\": [],\n        \"processes\": [],\n        \"regulatory_frameworks\": [],\n        \"notes\": null,\n        \"function_catalog\": [\n            {\n                \"function_id\": \"F01\",\n                \"function\": \"Executive Leadership & Board Governance\",\n                \"short_description\": \"Provides enterprise direction, approvals and accountability.\",\n                \"core_responsibilities\": \"Strategy approval; risk appetite; policy oversight; executive decisions; escalation management.\",\n                \"typical_sub_functions\": \"Board office; Secretary General office; executive committees\",\n                \"key_processes_records\": \"Board minutes; strategy approvals; risk appetite; policy approvals\",\n                \"risk_domains_supported\": \"Strategic; reputation; governance; enterprise risk\",\n                \"typical_risk_owner\": \"President / Secretary General\",\n                \"typical_control_owner\": \"Executive office / governance secretary\",\n                \"assignment_logic\": \"Assign cross-functional or unowned Tier-1 risks here after first-pass functional matching fails.\",\n                \"criticality\": \"Tier 1\"\n            }\n        ],\n        \"employee_hierarchy\": [\n            {\n                \"role_id\": \"R001\",\n                \"parent_role_id\": null,\n                \"hierarchy_level\": \"1\",\n                \"function_id\": \"F01\",\n                \"business_function\": \"Executive Leadership & Board Governance\",\n                \"template_designation\": \"President / Chairperson\",\n                \"role_type\": \"Executive\",\n                \"region_scope\": \"Enterprise\",\n                \"role_description\": \"Sets strategic direction, represents the organization externally and chairs highest-level governance decisions.\",\n                \"risk_workflow_role\": \"Executive Sponsor\",\n                \"likely_risks_owned_assigned\": \"Enterprise reputation, Olympic Movement alignment, major public commitments, strategic risk acceptance\",\n                \"decision_rights_approval_authority\": \"Final approval for Tier-1 enterprise risk acceptance and public escalation\",\n                \"primary_risk_tags\": \"enterprise; reputation; governance; strategy\",\n                \"escalation_role_id\": \"R002\"\n            }\n        ],\n        \"risk_assignment_rules\": [\n            {\n                \"rule_id\": \"AR01\",\n                \"risk_issue_domain\": \"Strategic objective / KPI risk\",\n                \"trigger_keywords_signals\": \"strategy, KPI, objective, benefits, transformation, target miss, dashboard exception\",\n                \"primary_function_id\": \"F02\",\n                \"primary_assignment_role_id\": \"R003\",\n                \"backup_role_id\": \"R004\",\n                \"escalation_role_id\": \"R002\",\n                \"default_criticality\": \"High\",\n                \"assignment_rationale\": \"Strategic risks should be owned by strategy/corporate performance, with executive escalation for enterprise impact.\",\n                \"suggested_tags\": \"strategy; KPI; benefits; transformation\",\n                \"internal_data_needed\": \"Objective ID, KPI ID, target, actual, variance, programme link\",\n                \"status\": \"Template\"\n            }\n        ]\n    }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -905,7 +905,7 @@
                 "update"
               ]
             },
-            "description": "## Purpose\nUpdate org business profile (API 3). Includes QOC function catalog, employee hierarchy template, and risk assignment rules under `business_demography`.\n\nCatalog arrays accept PDF header keys (e.g. `Function ID`) or snake_case (`function_id`). Omit `functions` to auto-derive from `function_catalog`.\n\n## Response 200\nApiResponse with demography_record_id."
+            "description": "## Purpose\nUpdate org business profile (API 3). Includes QOC function catalog, employee hierarchy template, and risk assignment rules under `business_demography`.\n\nCatalog arrays use snake_case keys only (e.g. `function_id`, `short_description`, `key_processes_records`). Omit `functions` to auto-derive from `function_catalog`.\n\n## Response 200\nApiResponse with demography_record_id."
           },
           "response": []
         },
@@ -1007,12 +1007,12 @@
                 }
               ]
             },
-            "description": "## Purpose\n**Fetch latest controls** for org — re-run anytime; list grows during extract job.\n\n## Query\n`client_org_id`, `document_id` (optional), `limit`, `offset`\n\n## Response 200\nArray of:\n```json\n{ \"id\", \"document_id\", \"client_org_id\", \"control_text\", \"section_ref\", \"framework\", \"source_page\", \"created_at\" }\n```"
+            "description": "## Purpose\n**Fetch latest controls** for org \u2014 re-run anytime; list grows during extract job.\n\n## Query\n`client_org_id`, `document_id` (optional), `limit`, `offset`\n\n## Response 200\nArray of:\n```json\n{ \"id\", \"document_id\", \"client_org_id\", \"control_text\", \"section_ref\", \"framework\", \"source_page\", \"created_at\" }\n```"
           },
           "response": []
         }
       ],
-      "description": "Stage 3 — read extracted controls after the automated pipeline. Control extraction is triggered by **Automated Pipeline → Ingest documents**."
+      "description": "Stage 3 \u2014 read extracted controls after the automated pipeline. Control extraction is triggered by **Automated Pipeline \u2192 Ingest documents**."
     },
     {
       "name": "04 Issues",
@@ -1076,7 +1076,7 @@
                 }
               ]
             },
-            "description": "## Purpose\nFetch latest issues — re-run while classify job runs.\n\n## Response 200\nArray of IssueListItem with optional embedded `classification`.\n\nFields: `id`, `title`, `body`, `client_org_id`, `issue_scope`, `origin`, `control_ids`, ..."
+            "description": "## Purpose\nFetch latest issues \u2014 re-run while classify job runs.\n\n## Response 200\nArray of IssueListItem with optional embedded `classification`.\n\nFields: `id`, `title`, `body`, `client_org_id`, `issue_scope`, `origin`, `control_ids`, ..."
           },
           "response": []
         },
@@ -1194,7 +1194,7 @@
           "response": []
         }
       ],
-      "description": "Stage 4 — read issues and classifications after the automated pipeline. Issue generation and classification run automatically via **POST /ingest**."
+      "description": "Stage 4 \u2014 read issues and classifications after the automated pipeline. Issue generation and classification run automatically via **POST /ingest**."
     },
     {
       "name": "05 Charts (PESTEL / SWOT / TVRA)",
@@ -1246,7 +1246,7 @@
                 }
               ]
             },
-            "description": "## Purpose\nChart data for Classifications UI — PESTEL, SWOT, TVRA, Geo/Global.\n\n## Query\n`issue_id` (optional — focus one issue), `industry`, `region` (display labels)\n\n## Response 200\n```json\n{\n  \"focused_issue\": { \"id\", \"title\", \"has_classification\" },\n  \"counts\": { \"pestel\", \"swot\", \"tvra\", \"geo_global\" },\n  \"summary\": { \"sources\", \"classified\", \"signals\", \"llm\", \"heuristic\", \"industry\", \"region\" },\n  \"agents\": [...],\n  \"pestel\": { \"Political\": [...], \"Economic\": [...], ... },\n  \"swot\": { \"strengths\", \"weaknesses\", \"opportunities\", \"threats\" },\n  \"tvra\": [ { \"type\": \"threat|vulnerability\", \"likelihood\", \"impact\", ... } ],\n  \"geo_global\": { \"geopolitical\", \"enforcement\", \"best_practice\", \"global_risk\" }\n}\n```\n\nRun after classify job completes."
+            "description": "## Purpose\nChart data for Classifications UI \u2014 PESTEL, SWOT, TVRA, Geo/Global.\n\n## Query\n`issue_id` (optional \u2014 focus one issue), `industry`, `region` (display labels)\n\n## Response 200\n```json\n{\n  \"focused_issue\": { \"id\", \"title\", \"has_classification\" },\n  \"counts\": { \"pestel\", \"swot\", \"tvra\", \"geo_global\" },\n  \"summary\": { \"sources\", \"classified\", \"signals\", \"llm\", \"heuristic\", \"industry\", \"region\" },\n  \"agents\": [...],\n  \"pestel\": { \"Political\": [...], \"Economic\": [...], ... },\n  \"swot\": { \"strengths\", \"weaknesses\", \"opportunities\", \"threats\" },\n  \"tvra\": [ { \"type\": \"threat|vulnerability\", \"likelihood\", \"impact\", ... } ],\n  \"geo_global\": { \"geopolitical\", \"enforcement\", \"best_practice\", \"global_risk\" }\n}\n```\n\nRun after classify job completes."
           },
           "response": []
         },
@@ -1339,7 +1339,7 @@
                 "seed-from-poc"
               ]
             },
-            "description": "## Purpose\nOne-time load from POC xlsx → `risk_library` table.\n\n## Response 200\n```json\n{ \"entries\": 81, \"csv_path\": \"...\" }\n```\nSync — not a job."
+            "description": "## Purpose\nOne-time load from POC xlsx \u2192 `risk_library` table.\n\n## Response 200\n```json\n{ \"entries\": 81, \"csv_path\": \"...\" }\n```\nSync \u2014 not a job."
           },
           "response": []
         },
@@ -1462,7 +1462,7 @@
           "response": []
         }
       ],
-      "description": "Stage 6 — seed risk library (one-time) and read candidate risks. Discovery runs automatically via **POST /ingest** after library is seeded."
+      "description": "Stage 6 \u2014 seed risk library (one-time) and read candidate risks. Discovery runs automatically via **POST /ingest** after library is seeded."
     },
     {
       "name": "07 Risk Scoring",
@@ -1506,7 +1506,7 @@
           "response": []
         }
       ],
-      "description": "Stage 7 — read risk assessments. Scoring (+ auto-promotion to `risks`) runs automatically via **POST /ingest**."
+      "description": "Stage 7 \u2014 read risk assessments. Scoring (+ auto-promotion to `risks`) runs automatically via **POST /ingest**."
     },
     {
       "name": "08 Risks Portal",
@@ -1558,7 +1558,7 @@
                 "upload-selected"
               ]
             },
-            "description": "## Purpose\nPortal: persist user-selected risks to `risks` table.\n\n**Note:** the automated pipeline (`POST /ingest/{clientOrgId}`) now does this step for you automatically after scoring — this manual endpoint remains for human-curated/ad-hoc risk entry.\n\n## Response 200\nApiResponse with created risk ids."
+            "description": "## Purpose\nPortal: persist user-selected risks to `risks` table.\n\n**Note:** the automated pipeline (`POST /ingest/{clientOrgId}`) now does this step for you automatically after scoring \u2014 this manual endpoint remains for human-curated/ad-hoc risk entry.\n\n## Response 200\nApiResponse with created risk ids."
           },
           "response": []
         },
@@ -1595,7 +1595,7 @@
                 "{{clientOrgId}}"
               ]
             },
-            "description": "## Purpose\nList the organisation's published risk register.\n\n## Response 200\nApiResponse envelope:\n- `data.risks` — array of register rows\n- `data.count` — number of risks returned\n\nEach risk includes core fields (`id`, `issue_id`, `risk_title`, `risk_rating`, …), tagging state (`tag_status`, `*_tags` as `{ id, name }` objects), owner state (`owner_assignment_status`, `owner_user_id`, `accountable_user_id`), and resolved hierarchy profiles (`owner`, `accountable` — `null` when not assigned)."
+            "description": "## Purpose\nList the organisation's published risk register.\n\n## Response 200\nApiResponse envelope:\n- `data.risks` \u2014 array of register rows\n- `data.count` \u2014 number of risks returned\n\nEach risk includes core fields (`id`, `issue_id`, `risk_title`, `risk_rating`, \u2026), tagging state (`tag_status`, `*_tags` as `{ id, name }` objects), owner state (`owner_assignment_status`, `owner_user_id`, `accountable_user_id`), and resolved hierarchy profiles (`owner`, `accountable` \u2014 `null` when not assigned)."
           },
           "response": []
         }
@@ -1604,7 +1604,7 @@
     },
     {
       "name": "09 Risk Tagging (Stage 09)",
-      "description": "Stage 9 — read tag recommendations and apply anything left `needs_review`. Tagging (`auto_apply: true`) runs automatically via **POST /ingest**.",
+      "description": "Stage 9 \u2014 read tag recommendations and apply anything left `needs_review`. Tagging (`auto_apply: true`) runs automatically via **POST /ingest**.",
       "item": [
         {
           "name": "List untagged risks",
@@ -1651,7 +1651,7 @@
                 }
               ]
             },
-            "description": "## Purpose\nWork queue for the tagging stage: risks with no or incomplete required tags (`process`, `function`, `kpi`).\n\n## Response 200\nArray of risks with `tag_status` (`untagged` | `partially_tagged`) and `missing_dimensions`.\n\n## Errors\n401 UNAUTHORIZED · 403 FORBIDDEN · 404 CLIENT_ORG_NOT_FOUND · 422 validation_error\n\nRead-only: never mutates data."
+            "description": "## Purpose\nWork queue for the tagging stage: risks with no or incomplete required tags (`process`, `function`, `kpi`).\n\n## Response 200\nArray of risks with `tag_status` (`untagged` | `partially_tagged`) and `missing_dimensions`.\n\n## Errors\n401 UNAUTHORIZED \u00b7 403 FORBIDDEN \u00b7 404 CLIENT_ORG_NOT_FOUND \u00b7 422 validation_error\n\nRead-only: never mutates data."
           },
           "response": [],
           "event": [
@@ -1715,7 +1715,7 @@
                 }
               ]
             },
-            "description": "## Purpose\nReview screen data: proposed/applied/needs_review/rejected tags with per-tag confidence, rationale and evidence (`risk_title`, `linked_issue`, `control_text`, …).\n\n**Run this immediately before \"Apply selected risk tags\".** The Tests script reads the catalog ids from the first actionable recommendation and stores them in `applySelectedTagsPayload`, which the Apply request then sends — so you never paste UUIDs by hand.\n\nOptional filters: `risk_id`, `status` (enable the disabled `status` query param to filter by `proposed` / `applied` / `needs_review` / `rejected`).\n\n## Errors\n404 RISK_NOT_FOUND · 422 INVALID_STATUS"
+            "description": "## Purpose\nReview screen data: proposed/applied/needs_review/rejected tags with per-tag confidence, rationale and evidence (`risk_title`, `linked_issue`, `control_text`, \u2026).\n\n**Run this immediately before \"Apply selected risk tags\".** The Tests script reads the catalog ids from the first actionable recommendation and stores them in `applySelectedTagsPayload`, which the Apply request then sends \u2014 so you never paste UUIDs by hand.\n\nOptional filters: `risk_id`, `status` (enable the disabled `status` query param to filter by `proposed` / `applied` / `needs_review` / `rejected`).\n\n## Errors\n404 RISK_NOT_FOUND \u00b7 422 INVALID_STATUS"
           },
           "response": [],
           "event": [
@@ -1727,7 +1727,7 @@
                   "",
                   "const rows = pm.response.json();",
                   "if (!Array.isArray(rows) || !rows.length) {",
-                  "    console.warn('No tag recommendations — check clientOrgId and run the tagging job first');",
+                  "    console.warn('No tag recommendations \u2014 check clientOrgId and run the tagging job first');",
                   "    return;",
                   "}",
                   "",
@@ -1756,7 +1756,7 @@
                   "    selected_tags: [selected]",
                   "}, null, 4));",
                   "",
-                  "console.log('applySelectedTagsPayload ready — risk', pick.risk_id, 'status', pick.tag_status);"
+                  "console.log('applySelectedTagsPayload ready \u2014 risk', pick.risk_id, 'status', pick.tag_status);"
                 ],
                 "type": "text/javascript",
                 "packages": {},
@@ -1801,7 +1801,7 @@
                 "apply-selected"
               ]
             },
-            "description": "## Purpose\nHuman-in-the-loop control point: writes analyst-approved tags to the official risk register and stores reviewer identity + timestamp.\n\n**Run \"List risk tag recommendations\" immediately before this request.** The Pre-request Script replaces the body with `applySelectedTagsPayload` (real catalog ids pulled from the recommendation), so the placeholder body below is only a fallback for manual edits.\n\n`replace_existing: true` (per risk) replaces a dimension instead of merging.\n\n## Response 200\n`data.updated` / `data.skipped` / `data.needs_review`.\n\n## Errors\n404 RISK_NOT_FOUND · 404 TAG_REFERENCE_NOT_FOUND · 409 TAG_ALREADY_APPLIED",
+            "description": "## Purpose\nHuman-in-the-loop control point: writes analyst-approved tags to the official risk register and stores reviewer identity + timestamp.\n\n**Run \"List risk tag recommendations\" immediately before this request.** The Pre-request Script replaces the body with `applySelectedTagsPayload` (real catalog ids pulled from the recommendation), so the placeholder body below is only a fallback for manual edits.\n\n`replace_existing: true` (per risk) replaces a dimension instead of merging.\n\n## Response 200\n`data.updated` / `data.skipped` / `data.needs_review`.\n\n## Errors\n404 RISK_NOT_FOUND \u00b7 404 TAG_REFERENCE_NOT_FOUND \u00b7 409 TAG_ALREADY_APPLIED",
             "body": {
               "mode": "raw",
               "raw": "{\n    \"client_org_id\": \"{{clientOrgId}}\",\n    \"selected_tags\": [\n        {\n            \"risk_id\": \"{{riskId}}\",\n            \"process_ids\": [],\n            \"function_ids\": [],\n            \"department_ids\": [],\n            \"kpi_ids\": [],\n            \"region_ids\": [],\n            \"control_family_ids\": [],\n            \"reviewer_notes\": \"Accepted system recommendation.\"\n        }\n    ]\n}",
@@ -1820,22 +1820,22 @@
                 "exec": [
                   "const payload = pm.collectionVariables.get('applySelectedTagsPayload');",
                   "if (!payload) {",
-                  "    throw new Error('Run \"List risk tag recommendations\" first — it builds applySelectedTagsPayload');",
+                  "    throw new Error('Run \"List risk tag recommendations\" first \u2014 it builds applySelectedTagsPayload');",
                   "}",
                   "let parsed;",
                   "try {",
                   "    parsed = JSON.parse(payload);",
                   "} catch (e) {",
-                  "    throw new Error('applySelectedTagsPayload is not valid JSON — re-run List risk tag recommendations');",
+                  "    throw new Error('applySelectedTagsPayload is not valid JSON \u2014 re-run List risk tag recommendations');",
                   "}",
                   "const item = (parsed.selected_tags || [])[0] || {};",
                   "if (!item.risk_id) {",
-                  "    throw new Error('No risk_id in applySelectedTagsPayload — re-run List risk tag recommendations');",
+                  "    throw new Error('No risk_id in applySelectedTagsPayload \u2014 re-run List risk tag recommendations');",
                   "}",
                   "const totalIds = ['process_ids','function_ids','department_ids','kpi_ids','region_ids','control_family_ids']",
                   "    .reduce((n, k) => n + ((item[k] || []).length), 0);",
                   "if (totalIds === 0) {",
-                  "    console.warn('No catalog ids found for risk ' + item.risk_id + ' — the recommendation had no tags to apply');",
+                  "    console.warn('No catalog ids found for risk ' + item.risk_id + ' \u2014 the recommendation had no tags to apply');",
                   "}",
                   "pm.request.body.update({ mode: 'raw', raw: payload, options: { raw: { language: 'json' } } });"
                 ],
@@ -1856,7 +1856,7 @@
                   "    console.log('updated:', JSON.stringify(d.updated || []));",
                   "    console.log('skipped:', JSON.stringify(d.skipped || []));",
                   "} else if (pm.response.code === 409) {",
-                  "    console.log('Already applied — this risk already has these tags (expected for re-runs).');",
+                  "    console.log('Already applied \u2014 this risk already has these tags (expected for re-runs).');",
                   "} else {",
                   "    console.warn('Apply failed:', JSON.stringify(body));",
                   "}"
@@ -1913,7 +1913,7 @@
     },
     {
       "name": "10 Risk Owner Assignment (Stage 10)",
-      "description": "Stage 10 — read owner recommendations and apply anything left `needs_review`. Owner assignment (`auto_apply: true`) runs automatically as the final stage of **POST /ingest**.",
+      "description": "Stage 10 \u2014 read owner recommendations and apply anything left `needs_review`. Owner assignment (`auto_apply: true`) runs automatically as the final stage of **POST /ingest**.",
       "item": [
         {
           "name": "List unassigned risks",
@@ -2016,7 +2016,7 @@
                 }
               ]
             },
-            "description": "## Purpose\nTrusted reference list for owner matching: users with title, function, department, region, management level, reporting line and ownership metadata (`function_owner`, `process_owner`, `kpi_owner`, `risk_admin`).\n\nUses the latest **approved** snapshot (auto-bootstrapped from registered users + catalog owners on first call). Pass `snapshot_id` to read a specific snapshot.\n\n## Errors\n404 CLIENT_ORG_NOT_FOUND · 404 HIERARCHY_NOT_FOUND"
+            "description": "## Purpose\nTrusted reference list for owner matching: users with title, function, department, region, management level, reporting line and ownership metadata (`function_owner`, `process_owner`, `kpi_owner`, `risk_admin`).\n\nUses the latest **approved** snapshot (auto-bootstrapped from registered users + catalog owners on first call). Pass `snapshot_id` to read a specific snapshot.\n\n## Errors\n404 CLIENT_ORG_NOT_FOUND \u00b7 404 HIERARCHY_NOT_FOUND"
           },
           "response": [],
           "event": [
@@ -2080,7 +2080,7 @@
                 }
               ]
             },
-            "description": "## Purpose\nReview screen data: recommended owner (full attributes, not just the id), alternates, confidence, `matched_on` evidence, and rationale.\n\nOptional filters: `risk_id`, `status` (`proposed` | `assigned` | `needs_review` | `rejected`).\n\n## Errors\n404 RISK_NOT_FOUND · 422 INVALID_STATUS"
+            "description": "## Purpose\nReview screen data: recommended owner (full attributes, not just the id), alternates, confidence, `matched_on` evidence, and rationale.\n\nOptional filters: `risk_id`, `status` (`proposed` | `assigned` | `needs_review` | `rejected`).\n\n## Errors\n404 RISK_NOT_FOUND \u00b7 422 INVALID_STATUS"
           },
           "response": [],
           "event": [
@@ -2136,7 +2136,7 @@
                 "apply-selected"
               ]
             },
-            "description": "## Purpose\nHuman approval control point: records the accountable owner on the official risk register with reviewer identity + timestamp.\n\nOptional: `accountable_user_id`, `assignment_type` (`primary_owner` | `accountable_owner` | `delegate` | `alternate_owner`), `replace_existing: true` to replace an existing owner.\n\n## Response 200\n`data.assigned` / `data.skipped` / `data.needs_review`.\n\n## Errors\n404 RISK_NOT_FOUND · 404 OWNER_NOT_FOUND · 409 OWNER_ALREADY_ASSIGNED",
+            "description": "## Purpose\nHuman approval control point: records the accountable owner on the official risk register with reviewer identity + timestamp.\n\nOptional: `accountable_user_id`, `assignment_type` (`primary_owner` | `accountable_owner` | `delegate` | `alternate_owner`), `replace_existing: true` to replace an existing owner.\n\n## Response 200\n`data.assigned` / `data.skipped` / `data.needs_review`.\n\n## Errors\n404 RISK_NOT_FOUND \u00b7 404 OWNER_NOT_FOUND \u00b7 409 OWNER_ALREADY_ASSIGNED",
             "body": {
               "mode": "raw",
               "raw": "{\n    \"client_org_id\": \"{{clientOrgId}}\",\n    \"selected_assignments\": [\n        {\n            \"risk_id\": \"{{riskId}}\",\n            \"owner_user_id\": \"{{ownerUserId}}\",\n            \"assignment_type\": \"primary_owner\",\n            \"reviewer_notes\": \"Accepted recommendation.\"\n        }\n    ]\n}",
@@ -2249,7 +2249,7 @@
                     }
                   ]
                 },
-                "description": "## Purpose\n**Fetch latest controls** for org — re-run anytime; list grows during extract job.\n\n## Query\n`client_org_id`, `document_id` (optional), `limit`, `offset`\n\n## Response 200\nArray of:\n```json\n{ \"id\", \"document_id\", \"client_org_id\", \"control_text\", \"section_ref\", \"framework\", \"source_page\", \"created_at\" }\n```"
+                "description": "## Purpose\n**Fetch latest controls** for org \u2014 re-run anytime; list grows during extract job.\n\n## Query\n`client_org_id`, `document_id` (optional), `limit`, `offset`\n\n## Response 200\nArray of:\n```json\n{ \"id\", \"document_id\", \"client_org_id\", \"control_text\", \"section_ref\", \"framework\", \"source_page\", \"created_at\" }\n```"
               },
               "response": []
             },
@@ -2329,12 +2329,12 @@
                     "{{clientOrgId}}"
                   ]
                 },
-                "description": "## Purpose\nQuick counts — re-run while extract job runs.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": { \"client_org_id\": \"...\", \"documents\": 3, \"controls\": 47 }\n}\n```"
+                "description": "## Purpose\nQuick counts \u2014 re-run while extract job runs.\n\n## Response 200\n```json\n{\n  \"status\": \"success\",\n  \"data\": { \"client_org_id\": \"...\", \"documents\": 3, \"controls\": 47 }\n}\n```"
               },
               "response": []
             }
           ],
-          "description": "Re-hit during extract job — row count increases."
+          "description": "Re-hit during extract job \u2014 row count increases."
         },
         {
           "name": "Documents",
@@ -2474,7 +2474,7 @@
                     }
                   ]
                 },
-                "description": "## Purpose\nFetch latest issues — re-run while classify job runs.\n\n## Response 200\nArray of IssueListItem with optional embedded `classification`.\n\nFields: `id`, `title`, `body`, `client_org_id`, `issue_scope`, `origin`, `control_ids`, ..."
+                "description": "## Purpose\nFetch latest issues \u2014 re-run while classify job runs.\n\n## Response 200\nArray of IssueListItem with optional embedded `classification`.\n\nFields: `id`, `title`, `body`, `client_org_id`, `issue_scope`, `origin`, `control_ids`, ..."
               },
               "response": []
             },
@@ -2837,14 +2837,14 @@
                     }
                   ]
                 },
-                "description": "## Purpose\nChart data for Classifications UI — PESTEL, SWOT, TVRA, Geo/Global.\n\n## Query\n`issue_id` (optional — focus one issue), `industry`, `region` (display labels)\n\n## Response 200\n```json\n{\n  \"focused_issue\": { \"id\", \"title\", \"has_classification\" },\n  \"counts\": { \"pestel\", \"swot\", \"tvra\", \"geo_global\" },\n  \"summary\": { \"sources\", \"classified\", \"signals\", \"llm\", \"heuristic\", \"industry\", \"region\" },\n  \"agents\": [...],\n  \"pestel\": { \"Political\": [...], \"Economic\": [...], ... },\n  \"swot\": { \"strengths\", \"weaknesses\", \"opportunities\", \"threats\" },\n  \"tvra\": [ { \"type\": \"threat|vulnerability\", \"likelihood\", \"impact\", ... } ],\n  \"geo_global\": { \"geopolitical\", \"enforcement\", \"best_practice\", \"global_risk\" }\n}\n```\n\nRun after classify job completes."
+                "description": "## Purpose\nChart data for Classifications UI \u2014 PESTEL, SWOT, TVRA, Geo/Global.\n\n## Query\n`issue_id` (optional \u2014 focus one issue), `industry`, `region` (display labels)\n\n## Response 200\n```json\n{\n  \"focused_issue\": { \"id\", \"title\", \"has_classification\" },\n  \"counts\": { \"pestel\", \"swot\", \"tvra\", \"geo_global\" },\n  \"summary\": { \"sources\", \"classified\", \"signals\", \"llm\", \"heuristic\", \"industry\", \"region\" },\n  \"agents\": [...],\n  \"pestel\": { \"Political\": [...], \"Economic\": [...], ... },\n  \"swot\": { \"strengths\", \"weaknesses\", \"opportunities\", \"threats\" },\n  \"tvra\": [ { \"type\": \"threat|vulnerability\", \"likelihood\", \"impact\", ... } ],\n  \"geo_global\": { \"geopolitical\", \"enforcement\", \"best_practice\", \"global_risk\" }\n}\n```\n\nRun after classify job completes."
               },
               "response": []
             }
           ]
         }
       ],
-      "description": "**Read APIs** — poll DB while jobs run (vs poll job = worker status)."
+      "description": "**Read APIs** \u2014 poll DB while jobs run (vs poll job = worker status)."
     },
     {
       "name": "Reference",
@@ -2997,7 +2997,7 @@
                     "extract"
                   ]
                 },
-                "description": "Non-org-scoped extract. Job type: extract_controls.\n\n**Debug/legacy only.** The org-scoped `POST /control-documents/extract/{clientOrgId}` trigger was removed — org-scoped extraction now runs automatically inside `POST /ingest/{clientOrgId}` (see the **Automated Pipeline** folder)."
+                "description": "Non-org-scoped extract. Job type: extract_controls.\n\n**Debug/legacy only.** The org-scoped `POST /control-documents/extract/{clientOrgId}` trigger was removed \u2014 org-scoped extraction now runs automatically inside `POST /ingest/{clientOrgId}` (see the **Automated Pipeline** folder)."
               },
               "response": []
             },
@@ -3286,7 +3286,7 @@
                 "reindex"
               ]
             },
-            "description": "Queues a `reindex_org` background job that rebuilds the Milvus vector index for the caller's org from the current DB. Admins may pass `{ \"client_org_id\": \"<target-org>\" }` to reindex a different org.\n\nThe test script saves the returned `job_id` to `{{jobId}}`. Poll with **Poll job** below until `status = completed`, then hit **Chatbot status** to confirm chunk count.\n\n## Request body (optional)\n```json\n{ \"client_org_id\": \"<org-uuid>\" }\n```\nLeave `{}` to reindex your own org.\n\n## Response `202`\n```json\n{\n  \"status\": \"accepted\",\n  \"message\": \"Knowledge reindex started\",\n  \"data\": {\n    \"job_id\": \"<uuid>\",\n    \"type\": \"reindex_org\",\n    \"client_org_id\": \"<org-uuid>\",\n    \"processing_status\": \"in_progress\"\n  }\n}\n```\n\n| HTTP | code |\n|------|------|\n| 400 | `VALIDATION_ERROR` — no org resolved |\n| 401 | `UNAUTHORIZED` / `SESSION_INVALID` |\n| 403 | `FORBIDDEN` — non-admin targeting another org |"
+            "description": "Queues a `reindex_org` background job that rebuilds the Milvus vector index for the caller's org from the current DB. Admins may pass `{ \"client_org_id\": \"<target-org>\" }` to reindex a different org.\n\nThe test script saves the returned `job_id` to `{{jobId}}`. Poll with **Poll job** below until `status = completed`, then hit **Chatbot status** to confirm chunk count.\n\n## Request body (optional)\n```json\n{ \"client_org_id\": \"<org-uuid>\" }\n```\nLeave `{}` to reindex your own org.\n\n## Response `202`\n```json\n{\n  \"status\": \"accepted\",\n  \"message\": \"Knowledge reindex started\",\n  \"data\": {\n    \"job_id\": \"<uuid>\",\n    \"type\": \"reindex_org\",\n    \"client_org_id\": \"<org-uuid>\",\n    \"processing_status\": \"in_progress\"\n  }\n}\n```\n\n| HTTP | code |\n|------|------|\n| 400 | `VALIDATION_ERROR` \u2014 no org resolved |\n| 401 | `UNAUTHORIZED` / `SESSION_INVALID` |\n| 403 | `FORBIDDEN` \u2014 non-admin targeting another org |"
           },
           "response": []
         },
@@ -3326,7 +3326,7 @@
           "response": []
         },
         {
-          "name": "Chat — stream answer (SSE)",
+          "name": "Chat \u2014 stream answer (SSE)",
           "request": {
             "auth": {
               "type": "bearer",
@@ -3370,12 +3370,12 @@
                 "query"
               ]
             },
-            "description": "Ask the chatbot a question. The response is a **Server-Sent Events (SSE) stream** — Postman will display each event as it arrives in the response panel.\n\n**Prerequisites:** `indexing_active = true` and `org_indexed_chunks > 0` (run **Trigger reindex** first if needed).\n\n## Request body\n```json\n{\n  \"question\": \"What are my highest rated risks and who owns them?\",\n  \"top_k\": 8,\n  \"stage_hint\": \"risk\",\n  \"history\": [\n    { \"role\": \"user\", \"content\": \"previous question\" },\n    { \"role\": \"assistant\", \"content\": \"previous answer\" }\n  ]\n}\n```\n\n| Field | Required | Notes |\n|-------|----------|-------|\n| `question` | Yes | The question to ask |\n| `top_k` | No | Chunks to retrieve (default 8, max 50) |\n| `stage_hint` | No | Bias retrieval: `risk` \\| `issue` \\| `control` \\| `org` \\| `classification` \\| `tag` \\| `assignment` |\n| `history` | No | Prior turns for multi-turn conversations |\n\n## SSE event stream\nFour event types arrive in order:\n\n```text\nevent: retrieval\ndata: {\"sources\":[{\"entity_type\":\"risk\",\"entity_id\":\"...\",\"stage\":\"risk\",\"score\":0.92,\"snippet\":\"Risk: ...\"}]}\n\nevent: message\ndata: {\"delta\":\"Your \"}\n\nevent: message\ndata: {\"delta\":\"highest rated risk is...\"}\n\nevent: done\ndata: {\"citations\":[{\"entity_type\":\"risk\",\"entity_id\":\"...\",\"source_table\":\"risks\",\"score\":0.92}]}\n```\n\nOn error:\n```text\nevent: error\ndata: {\"message\":\"Chat failed: ...\"}\n```\n\n**curl alternative:**\n```bash\ncurl -N -X POST http://localhost:8000/api/v1/chatbot/query \\\n  -H 'Authorization: Bearer TOKEN' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"question\":\"What are my highest rated risks?\"}'\n```\n\n| HTTP | code |\n|------|------|\n| 401 | `UNAUTHORIZED` / `SESSION_INVALID` |\n| 403 | `FORBIDDEN` |"
+            "description": "Ask the chatbot a question. The response is a **Server-Sent Events (SSE) stream** \u2014 Postman will display each event as it arrives in the response panel.\n\n**Prerequisites:** `indexing_active = true` and `org_indexed_chunks > 0` (run **Trigger reindex** first if needed).\n\n## Request body\n```json\n{\n  \"question\": \"What are my highest rated risks and who owns them?\",\n  \"top_k\": 8,\n  \"stage_hint\": \"risk\",\n  \"history\": [\n    { \"role\": \"user\", \"content\": \"previous question\" },\n    { \"role\": \"assistant\", \"content\": \"previous answer\" }\n  ]\n}\n```\n\n| Field | Required | Notes |\n|-------|----------|-------|\n| `question` | Yes | The question to ask |\n| `top_k` | No | Chunks to retrieve (default 8, max 50) |\n| `stage_hint` | No | Bias retrieval: `risk` \\| `issue` \\| `control` \\| `org` \\| `classification` \\| `tag` \\| `assignment` |\n| `history` | No | Prior turns for multi-turn conversations |\n\n## SSE event stream\nFour event types arrive in order:\n\n```text\nevent: retrieval\ndata: {\"sources\":[{\"entity_type\":\"risk\",\"entity_id\":\"...\",\"stage\":\"risk\",\"score\":0.92,\"snippet\":\"Risk: ...\"}]}\n\nevent: message\ndata: {\"delta\":\"Your \"}\n\nevent: message\ndata: {\"delta\":\"highest rated risk is...\"}\n\nevent: done\ndata: {\"citations\":[{\"entity_type\":\"risk\",\"entity_id\":\"...\",\"source_table\":\"risks\",\"score\":0.92}]}\n```\n\nOn error:\n```text\nevent: error\ndata: {\"message\":\"Chat failed: ...\"}\n```\n\n**curl alternative:**\n```bash\ncurl -N -X POST http://localhost:8000/api/v1/chatbot/query \\\n  -H 'Authorization: Bearer TOKEN' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"question\":\"What are my highest rated risks?\"}'\n```\n\n| HTTP | code |\n|------|------|\n| 401 | `UNAUTHORIZED` / `SESSION_INVALID` |\n| 403 | `FORBIDDEN` |"
           },
           "response": []
         },
         {
-          "name": "Chat — risk-specific question",
+          "name": "Chat \u2014 risk-specific question",
           "request": {
             "auth": {
               "type": "bearer",
@@ -3424,7 +3424,7 @@
           "response": []
         },
         {
-          "name": "Chat — owner / assignment question",
+          "name": "Chat \u2014 owner / assignment question",
           "request": {
             "auth": {
               "type": "bearer",
@@ -3473,7 +3473,7 @@
           "response": []
         }
       ],
-      "description": "Stage 11 — Milvus-backed SSE RAG chatbot. Answers questions using **only** the caller's org's indexed knowledge (tenant-isolated). The `client_org_id` is taken from the Bearer token — the client never sends it.\n\n**Workflow:**\n1. `GET /chatbot/status` — confirm Milvus + embeddings are live.\n2. `POST /chatbot/reindex` → poll job → verify `org_indexed_chunks > 0`.\n3. `POST /chatbot/query` — ask a question; read the SSE stream.\n\n**SSE stream order:** `retrieval` (sources found) → `message` (answer tokens) → `done` (citations). On failure: `error`.\n\n**Note:** This endpoint requires the Azure OpenAI embedding deployment (`AZURE_OPENAI_EMBEDDING_DEPLOYMENT`) and a running Milvus instance to be active. Check `chatbot/status` first."
+      "description": "Stage 11 \u2014 Milvus-backed SSE RAG chatbot. Answers questions using **only** the caller's org's indexed knowledge (tenant-isolated). The `client_org_id` is taken from the Bearer token \u2014 the client never sends it.\n\n**Workflow:**\n1. `GET /chatbot/status` \u2014 confirm Milvus + embeddings are live.\n2. `POST /chatbot/reindex` \u2192 poll job \u2192 verify `org_indexed_chunks > 0`.\n3. `POST /chatbot/query` \u2014 ask a question; read the SSE stream.\n\n**SSE stream order:** `retrieval` (sources found) \u2192 `message` (answer tokens) \u2192 `done` (citations). On failure: `error`.\n\n**Note:** This endpoint requires the Azure OpenAI embedding deployment (`AZURE_OPENAI_EMBEDDING_DEPLOYMENT`) and a running Milvus instance to be active. Check `chatbot/status` first."
     }
   ],
   "event": [
@@ -3525,7 +3525,7 @@
     {
       "key": "samplePdfHint",
       "value": "backend/fixtures/sample_control.pdf",
-      "description": "Sample PDF path in repo — attach manually in Ingest request."
+      "description": "Sample PDF path in repo \u2014 attach manually in Ingest request."
     },
     {
       "key": "documentId",

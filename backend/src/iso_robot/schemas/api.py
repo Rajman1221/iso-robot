@@ -305,55 +305,49 @@ class ProcessItem(BaseModel):
 
 
 class FunctionCatalogItem(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    function_id: str = Field(alias="Function ID")
-    function: str = Field(alias="Function")
-    short_description: str = Field(alias="Short Description")
-    core_responsibilities: str = Field(alias="Core Responsibilities")
-    typical_sub_functions: str = Field(alias="Typical Sub-functions")
-    key_processes_records: str = Field(alias="Key Processes / Records")
-    risk_domains_supported: str = Field(alias="Risk Domains Supported")
-    typical_risk_owner: str = Field(alias="Typical Risk Owner")
-    typical_control_owner: str = Field(alias="Typical Control Owner")
-    assignment_logic: str = Field(alias="Assignment Logic")
-    criticality: Optional[str] = Field(default=None, alias="Criticality")
+    function_id: str
+    function: str
+    short_description: str
+    core_responsibilities: str
+    typical_sub_functions: str
+    key_processes_records: str
+    risk_domains_supported: str
+    typical_risk_owner: str
+    typical_control_owner: str
+    assignment_logic: str
+    criticality: Optional[str] = None
 
 
 class EmployeeHierarchyItem(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    role_id: str = Field(alias="Role ID")
-    parent_role_id: Optional[str] = Field(default=None, alias="Parent Role ID")
-    hierarchy_level: str = Field(alias="Hierarchy Level")
-    function_id: str = Field(alias="Function ID")
-    business_function: str = Field(alias="Business Function")
-    template_designation: str = Field(alias="Template Designation")
-    role_type: str = Field(alias="Role Type")
-    region_scope: str = Field(alias="Region / Scope")
-    role_description: str = Field(alias="Role Description")
-    risk_workflow_role: str = Field(alias="Risk Workflow Role")
-    likely_risks_owned_assigned: str = Field(alias="Likely Risks Owned / Assigned")
-    decision_rights_approval_authority: str = Field(alias="Decision Rights / Approval Authority")
-    primary_risk_tags: str = Field(alias="Primary Risk Tags")
-    escalation_role_id: Optional[str] = Field(default=None, alias="Escalation Role ID")
+    role_id: str
+    parent_role_id: Optional[str] = None
+    hierarchy_level: str
+    function_id: str
+    business_function: str
+    template_designation: str
+    role_type: str
+    region_scope: str
+    role_description: str
+    risk_workflow_role: str
+    likely_risks_owned_assigned: str
+    decision_rights_approval_authority: str
+    primary_risk_tags: str
+    escalation_role_id: Optional[str] = None
 
 
 class RiskAssignmentRuleItem(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    rule_id: str = Field(alias="Rule ID")
-    risk_issue_domain: str = Field(alias="Risk / Issue Domain")
-    trigger_keywords_signals: str = Field(alias="Trigger Keywords / Signals")
-    primary_function_id: str = Field(alias="Primary Function ID")
-    primary_assignment_role_id: str = Field(alias="Primary Assignment Role ID")
-    backup_role_id: Optional[str] = Field(default=None, alias="Backup Role ID")
-    escalation_role_id: Optional[str] = Field(default=None, alias="Escalation Role ID")
-    default_criticality: str = Field(alias="Default Criticality")
-    assignment_rationale: str = Field(alias="Assignment Rationale")
-    suggested_tags: str = Field(alias="Suggested Tags")
-    internal_data_needed: str = Field(alias="Internal Data Needed")
-    status: str = Field(alias="Status")
+    rule_id: str
+    risk_issue_domain: str
+    trigger_keywords_signals: str
+    primary_function_id: str
+    primary_assignment_role_id: str
+    backup_role_id: Optional[str] = None
+    escalation_role_id: Optional[str] = None
+    default_criticality: str
+    assignment_rationale: str
+    suggested_tags: str
+    internal_data_needed: str
+    status: str
 
 
 class BusinessDemographyPayload(BaseModel):
@@ -421,9 +415,9 @@ class DemographyResponse(BaseModel):
     regulatory_region: Optional[str] = None
     website: Optional[str] = None
     functions: List[Any] = Field(default_factory=list)
-    function_catalog: List[Any] = Field(default_factory=list)
-    employee_hierarchy: List[Any] = Field(default_factory=list)
-    risk_assignment_rules: List[Any] = Field(default_factory=list)
+    function_catalog: List[FunctionCatalogItem] = Field(default_factory=list)
+    employee_hierarchy: List[EmployeeHierarchyItem] = Field(default_factory=list)
+    risk_assignment_rules: List[RiskAssignmentRuleItem] = Field(default_factory=list)
     locations: List[Any] = Field(default_factory=list)
     processes: List[Any] = Field(default_factory=list)
     regulatory_frameworks: List[Any] = Field(default_factory=list)

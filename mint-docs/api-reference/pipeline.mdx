@@ -198,6 +198,11 @@ curl "http://157.20.190.175:8000/api/v1/pipeline/status/{clientOrgId}" \
     "processed_documents": 2,
     "failed_documents": 0,
     "progress_percent": 75,
+    "stage_summary": [
+      { "stage": "ingest_register", "status": "completed", "document_count": 1, "failed_count": 0, "started_at": "2026-06-30T10:00:00Z", "completed_at": "2026-06-30T10:00:01Z" },
+      { "stage": "extract_controls", "status": "completed", "document_count": 2, "failed_count": 0, "started_at": "2026-06-30T10:00:01Z", "completed_at": "2026-06-30T10:01:35Z" },
+      { "stage": "score_risks", "status": "running", "document_count": 1, "failed_count": 0, "started_at": "2026-06-30T10:03:30Z", "completed_at": null }
+    ],
     "celery_task_id": "6b1f1e6a-8f1a-4a9e-9c2e-4f6f7a1b2c3d",
     "error": null,
     "started_at": "2026-06-30T10:00:00Z",
@@ -220,6 +225,13 @@ curl "http://157.20.190.175:8000/api/v1/pipeline/status/{clientOrgId}" \
 `steps[]` has one row per `(stage, document)` — org-level stages (everything
 after `extract_controls`) have `document_id: null`; `extract_controls` has one
 row per document, processed in parallel.
+
+`stage_summary[]` rolls up `steps[]` by stage (document counts, failed counts,
+and earliest/latest timestamps). Use it for compact progress UIs; use `steps[]`
+for per-document detail.
+
+The response does **not** include elapsed-time or ETA fields — poll `status`,
+`current_stage`, and `steps[].status` instead.
 
 ### `status` values (pipeline run)
 
@@ -334,7 +346,9 @@ workers cannot read files the API saved to container-local `/tmp`.
 
 <Tip>
 `progress_percent` is a coarse UI hint (`current_stage`'s index in the 10-stage
-list) — use `current_stage` and `steps[].status` for precise integration logic.
+list). Prefer `current_stage`, `stage_summary[]`, and `steps[].status` for
+integration logic. There is no server-side ETA — keep polling until `status` is
+`completed` or `failed`.
 </Tip>
 
 ---

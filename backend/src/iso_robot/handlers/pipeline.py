@@ -37,8 +37,6 @@ from iso_robot.handlers.pipeline_auth import authenticate_pipeline_request
 from iso_robot.helpers.org_paths import org_base_dir
 from iso_robot.helpers.verify_cache import VerifiedContext
 from iso_robot.observability.pipeline_progress import (
-    elapsed_seconds,
-    estimate_remaining_seconds,
     progress_percent,
     stage_summary,
 )
@@ -197,7 +195,7 @@ async def ingest(
     dest_root.mkdir(parents=True, exist_ok=True)
 
     documents: list[dict[str, Any]] = []
-    new_document_ids: list[str] = []
+    new_documents: list[dict[str, str]] = []
     reserved_names: set[str] = set()
     new_count = 0
     skipped_count = 0
@@ -248,7 +246,13 @@ async def ingest(
         documents.append(result)
         if is_new:
             new_count += 1
-            new_document_ids.append(str(result["document_id"]))
+            new_documents.append(
+                {
+                    "document_id": str(result["document_id"]),
+                    "filename": str(result["filename"]),
+                    "document_registry_id": str(result["document_registry_id"]),
+                }
+            )
         elif result["status"] == "duplicate":
             skipped_count += 1
 
@@ -257,7 +261,7 @@ async def ingest(
         run_id, total_documents=total, new_documents=new_count, skipped_duplicate_documents=skipped_count
     )
 
-    task_id = enqueue_pipeline(run_id, new_document_ids)
+    task_id = enqueue_pipeline(run_id, new_documents)
     await run_repo.set_celery_root_task_id(run_id, task_id)
 
     from iso_robot.observability.context import bind_context
@@ -329,14 +333,6 @@ async def pipeline_status(
         for s in raw_steps
     ]
 
-    elapsed = elapsed_seconds(run.get("started_at") or run.get("created_at"))
-    remaining = estimate_remaining_seconds(
-        status=str(run["status"]),
-        current_stage=str(run["current_stage"]),
-        started_at=run.get("started_at") or run.get("created_at"),
-        steps=steps,
-    )
-
     return ApiResponse(
         status="success",
         message="Pipeline status retrieved",
@@ -353,8 +349,6 @@ async def pipeline_status(
             "processed_documents": run["processed_documents"],
             "failed_documents": run["failed_documents"],
             "progress_percent": _progress_percent(run["status"], run["current_stage"]),
-            "elapsed_seconds": round(elapsed, 2) if elapsed is not None else None,
-            "estimated_remaining_seconds": round(remaining, 2) if remaining is not None else None,
             "stage_summary": stage_summary(steps),
             "celery_task_id": run.get("celery_root_task_id"),
             "error": run.get("error"),

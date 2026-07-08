@@ -254,18 +254,22 @@ class PipelineStepRepository:
         return [to_dict(r) for r in rows]
 
     async def find_run_level_by_stage(self, pipeline_run_id: str, stage: str) -> Optional[dict[str, Any]]:
-        """Latest org/run-level (non per-document) step for a stage — used to pass
-        small bits of state (e.g. newly created issue_ids) between sequential
-        pipeline tasks without a shared in-memory context."""
+        """Latest step for a stage that carries stage result state (e.g. issue_ids).
+
+        Per-document run-level steps share the same result_json; any completed row
+        for the stage is sufficient for downstream tasks to read prior state.
+        """
         stmt = (
             select(PipelineDocumentStep)
             .where(
                 PipelineDocumentStep.pipeline_run_id == pipeline_run_id,
                 PipelineDocumentStep.stage == stage,
-                PipelineDocumentStep.document_registry_id.is_(None),
             )
             .order_by(PipelineDocumentStep.created_at.desc())
-            .limit(1)
         )
-        obj = (await self._session.execute(stmt)).scalars().first()
-        return to_dict(obj) if obj else None
+        rows = (await self._session.execute(stmt)).scalars().all()
+        for obj in rows:
+            row = to_dict(obj)
+            if row.get("result_json"):
+                return row
+        return to_dict(rows[0]) if rows else None

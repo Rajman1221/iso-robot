@@ -29,8 +29,8 @@ def _pdf_bytes(tag: str) -> bytes:
 def client(monkeypatch: pytest.MonkeyPatch):
     calls: list[dict[str, Any]] = []
 
-    def _fake_enqueue(run_id: str, document_ids: list[str]) -> str:
-        calls.append({"run_id": run_id, "document_ids": document_ids})
+    def _fake_enqueue(run_id: str, documents: list[dict[str, Any]]) -> str:
+        calls.append({"run_id": run_id, "documents": documents})
         return f"fake-task-{run_id}"
 
     monkeypatch.setattr("iso_robot.handlers.pipeline.enqueue_pipeline", _fake_enqueue)
@@ -122,7 +122,16 @@ async def test_ingest_new_document_queues_pipeline(client: TestClient, db_sessio
     assert len(doc["sha256"]) == 64
     assert data["status_url"].endswith(f"/api/v1/pipeline/status/{org['id']}?pipeline_run_id={data['pipeline_run_id']}")
     assert client.enqueue_calls == [  # type: ignore[attr-defined]
-        {"run_id": data["pipeline_run_id"], "document_ids": [doc["document_id"]]}
+        {
+            "run_id": data["pipeline_run_id"],
+            "documents": [
+                {
+                    "document_id": doc["document_id"],
+                    "filename": doc["filename"],
+                    "document_registry_id": doc["document_registry_id"],
+                }
+            ],
+        }
     ]
 
 

@@ -25,6 +25,11 @@ from iso_robot.domain.risk_owner_assignment import run_risk_owner_assignment_job
 from iso_robot.domain.risk_tagging import run_risk_tagging_job
 from iso_robot.domain.score_risks import score_risks_job
 from iso_robot.pipeline.cleanup import cleanup_ephemeral_uploads
+from iso_robot.pipeline.context import (
+    complete_steps,
+    create_steps_for_documents,
+    start_steps,
+)
 from iso_robot.repositories.control_repository import ControlRepository
 from iso_robot.repositories.issue_control_repository import IssueControlRepository
 from iso_robot.repositories.issue_repository import IssueRepository
@@ -93,20 +98,28 @@ async def _auto_promote_risks(session: AsyncSession, client_org_id: str, issue_i
 
 
 @celery_app.task(name="iso_robot.pipeline.tasks.ingest_register")
-def ingest_register(run_id: str) -> None:
+def ingest_register(run_id: str, documents: list[Any] | None = None) -> None:
     async def _run(session: AsyncSession) -> None:
         run_repo = PipelineRunRepository(session)
         steps = PipelineStepRepository(session)
         await run_repo.set_stage(run_id, "ingest_register", status="running")
-        step = await steps.create(pipeline_run_id=run_id, stage="ingest_register")
-        await steps.start(step["id"])
-        await steps.complete(step["id"], result={"registered": True})
+        step_rows = await create_steps_for_documents(
+            steps, pipeline_run_id=run_id, stage="ingest_register", documents=documents
+        )
+        await start_steps(steps, step_rows)
+        await complete_steps(steps, step_rows, result={"registered": True})
 
     run_async(_run)
 
 
 @celery_app.task(name="iso_robot.pipeline.tasks.extract_controls", bind=True, max_retries=2, default_retry_delay=15)
-def extract_controls(self, run_id: str, document_id: str) -> dict[str, Any]:
+def extract_controls(
+    self,
+    run_id: str,
+    document_id: str,
+    filename: Optional[str] = None,
+    document_registry_id: Optional[str] = None,
+) -> dict[str, Any]:
     async def _run(session: AsyncSession) -> dict[str, Any]:
         settings = get_settings()
         run_repo = PipelineRunRepository(session)
@@ -118,7 +131,11 @@ def extract_controls(self, run_id: str, document_id: str) -> dict[str, Any]:
 
         await run_repo.set_stage(run_id, "extract_controls", status="running")
         step = await steps.create(
-            pipeline_run_id=run_id, stage="extract_controls", document_id=document_id
+            pipeline_run_id=run_id,
+            stage="extract_controls",
+            document_id=document_id,
+            filename=filename or None,
+            document_registry_id=document_registry_id or None,
         )
         await steps.start(step["id"])
         try:
@@ -158,7 +175,7 @@ def extract_controls(self, run_id: str, document_id: str) -> dict[str, Any]:
 
 
 @celery_app.task(name="iso_robot.pipeline.tasks.issues_from_controls", bind=True, max_retries=1)
-def issues_from_controls(self, run_id: str) -> None:
+def issues_from_controls(self, run_id: str, documents: list[Any] | None = None) -> None:
     async def _run(session: AsyncSession) -> None:
         settings = get_settings()
         run_repo = PipelineRunRepository(session)
@@ -173,21 +190,23 @@ def issues_from_controls(self, run_id: str) -> None:
             raise RuntimeError(msg)
 
         await run_repo.set_stage(run_id, "issues_from_controls", status="running")
-        step = await steps.create(pipeline_run_id=run_id, stage="issues_from_controls")
-        await steps.start(step["id"])
+        step_rows = await create_steps_for_documents(
+            steps, pipeline_run_id=run_id, stage="issues_from_controls", documents=documents
+        )
+        await start_steps(steps, step_rows)
         # replace_existing=True (the function's own default): it re-derives issues
         # from ALL of the org's controls (not just this run's new documents), so
         # replacing avoids piling up duplicate issues across repeated ingests.
         result = await run_issues_from_controls_job(
             settings, session, {"client_org_id": run["client_org_id"], "replace_existing": True}
         )
-        await steps.complete(step["id"], result=result)
+        await complete_steps(steps, step_rows, result=result)
 
     run_async(_run)
 
 
 @celery_app.task(name="iso_robot.pipeline.tasks.classify_issues", bind=True, max_retries=1)
-def classify_issues(self, run_id: str) -> None:
+def classify_issues(self, run_id: str, documents: list[Any] | None = None) -> None:
     async def _run(session: AsyncSession) -> None:
         settings = get_settings()
         run_repo = PipelineRunRepository(session)
@@ -198,8 +217,10 @@ def classify_issues(self, run_id: str) -> None:
 
         issue_ids = await _issue_ids_from_previous_stage(session, run_id)
         await run_repo.set_stage(run_id, "classify_issues", status="running")
-        step = await steps.create(pipeline_run_id=run_id, stage="classify_issues")
-        await steps.start(step["id"])
+        step_rows = await create_steps_for_documents(
+            steps, pipeline_run_id=run_id, stage="classify_issues", documents=documents
+        )
+        await start_steps(steps, step_rows)
         # `classify_issues_job` treats a falsy issue_ids (None OR []) as "scan ALL
         # orgs for unclassified issues" — only call it when this run actually has
         # issue ids to avoid leaking scope beyond this run.
@@ -213,8 +234,9 @@ def classify_issues(self, run_id: str) -> None:
             count = await classify_issues_job(
                 settings, session, issue_ids, reclassify=False
             )
-        await steps.complete(
-            step["id"],
+        await complete_steps(
+            steps,
+            step_rows,
             result={
                 "classified": count,
                 "skipped_already_classified": skipped,
@@ -226,7 +248,7 @@ def classify_issues(self, run_id: str) -> None:
 
 
 @celery_app.task(name="iso_robot.pipeline.tasks.generate_charts", bind=True, max_retries=1)
-def generate_charts(self, run_id: str) -> None:
+def generate_charts(self, run_id: str, documents: list[Any] | None = None) -> None:
     async def _run(session: AsyncSession) -> None:
         run_repo = PipelineRunRepository(session)
         steps = PipelineStepRepository(session)
@@ -235,18 +257,22 @@ def generate_charts(self, run_id: str) -> None:
             raise ValueError(f"pipeline run {run_id} not found")
 
         await run_repo.set_stage(run_id, "generate_charts", status="running")
-        step = await steps.create(pipeline_run_id=run_id, stage="generate_charts")
-        await steps.start(step["id"])
+        step_rows = await create_steps_for_documents(
+            steps, pipeline_run_id=run_id, stage="generate_charts", documents=documents
+        )
+        await start_steps(steps, step_rows)
         # Chart aggregation is global-by-design today (see plan risks/notes);
         # scoping it per client_org_id is a tracked follow-up, not this migration.
         result = await aggregate_classifications(session)
-        await steps.complete(step["id"], result={"generated": True, "sections": list(result.keys())[:20]})
+        await complete_steps(
+            steps, step_rows, result={"generated": True, "sections": list(result.keys())[:20]}
+        )
 
     run_async(_run)
 
 
 @celery_app.task(name="iso_robot.pipeline.tasks.risk_discovery", bind=True, max_retries=1)
-def risk_discovery(self, run_id: str) -> None:
+def risk_discovery(self, run_id: str, documents: list[Any] | None = None) -> None:
     async def _run(session: AsyncSession) -> None:
         settings = get_settings()
         run_repo = PipelineRunRepository(session)
@@ -256,17 +282,19 @@ def risk_discovery(self, run_id: str) -> None:
             raise ValueError(f"pipeline run {run_id} not found")
 
         await run_repo.set_stage(run_id, "risk_discovery", status="running")
-        step = await steps.create(pipeline_run_id=run_id, stage="risk_discovery")
-        await steps.start(step["id"])
+        step_rows = await create_steps_for_documents(
+            steps, pipeline_run_id=run_id, stage="risk_discovery", documents=documents
+        )
+        await start_steps(steps, step_rows)
         # Global-by-design today, same caveat as generate_charts (see plan notes).
         result = await run_risk_discovery(settings, session)
-        await steps.complete(step["id"], result=result)
+        await complete_steps(steps, step_rows, result=result)
 
     run_async(_run)
 
 
 @celery_app.task(name="iso_robot.pipeline.tasks.score_risks", bind=True, max_retries=1)
-def score_risks(self, run_id: str) -> None:
+def score_risks(self, run_id: str, documents: list[Any] | None = None) -> None:
     async def _run(session: AsyncSession) -> None:
         settings = get_settings()
         run_repo = PipelineRunRepository(session)
@@ -277,21 +305,25 @@ def score_risks(self, run_id: str) -> None:
 
         issue_ids = await _issue_ids_from_previous_stage(session, run_id)
         await run_repo.set_stage(run_id, "score_risks", status="running")
-        step = await steps.create(pipeline_run_id=run_id, stage="score_risks")
-        await steps.start(step["id"])
+        step_rows = await create_steps_for_documents(
+            steps, pipeline_run_id=run_id, stage="score_risks", documents=documents
+        )
+        await start_steps(steps, step_rows)
         scored = await score_risks_job(settings, session, issue_ids, None, client_org_id=run["client_org_id"])
         risk_ids: List[str] = []
         if issue_ids:
             risk_ids = await _auto_promote_risks(session, run["client_org_id"], issue_ids)
-        await steps.complete(
-            step["id"], result={"scored": scored, "risks_created": len(risk_ids), "risk_ids": risk_ids}
+        await complete_steps(
+            steps,
+            step_rows,
+            result={"scored": scored, "risks_created": len(risk_ids), "risk_ids": risk_ids},
         )
 
     run_async(_run)
 
 
 @celery_app.task(name="iso_robot.pipeline.tasks.risk_tagging", bind=True, max_retries=1)
-def risk_tagging(self, run_id: str) -> None:
+def risk_tagging(self, run_id: str, documents: list[Any] | None = None) -> None:
     async def _run(session: AsyncSession) -> None:
         settings = get_settings()
         run_repo = PipelineRunRepository(session)
@@ -301,8 +333,10 @@ def risk_tagging(self, run_id: str) -> None:
             raise ValueError(f"pipeline run {run_id} not found")
 
         await run_repo.set_stage(run_id, "risk_tagging", status="running")
-        step = await steps.create(pipeline_run_id=run_id, stage="risk_tagging")
-        await steps.start(step["id"])
+        step_rows = await create_steps_for_documents(
+            steps, pipeline_run_id=run_id, stage="risk_tagging", documents=documents
+        )
+        await start_steps(steps, step_rows)
 
         jobs = JobRepository(session)
         job = await jobs.create(
@@ -315,13 +349,13 @@ def risk_tagging(self, run_id: str) -> None:
             job_id=job["id"],
         )
         await jobs.update_status(job["id"], status="completed")
-        await steps.complete(step["id"], result=result)
+        await complete_steps(steps, step_rows, result=result)
 
     run_async(_run)
 
 
 @celery_app.task(name="iso_robot.pipeline.tasks.risk_owner_assignment", bind=True, max_retries=1)
-def risk_owner_assignment(self, run_id: str) -> None:
+def risk_owner_assignment(self, run_id: str, documents: list[Any] | None = None) -> None:
     async def _run(session: AsyncSession) -> None:
         settings = get_settings()
         run_repo = PipelineRunRepository(session)
@@ -331,8 +365,10 @@ def risk_owner_assignment(self, run_id: str) -> None:
             raise ValueError(f"pipeline run {run_id} not found")
 
         await run_repo.set_stage(run_id, "risk_owner_assignment", status="running")
-        step = await steps.create(pipeline_run_id=run_id, stage="risk_owner_assignment")
-        await steps.start(step["id"])
+        step_rows = await create_steps_for_documents(
+            steps, pipeline_run_id=run_id, stage="risk_owner_assignment", documents=documents
+        )
+        await start_steps(steps, step_rows)
 
         jobs = JobRepository(session)
         job = await jobs.create(
@@ -354,7 +390,7 @@ def risk_owner_assignment(self, run_id: str) -> None:
             job_id=job["id"],
         )
         await jobs.update_status(job["id"], status="completed")
-        await steps.complete(step["id"], result=result)
+        await complete_steps(steps, step_rows, result=result)
 
     run_async(_run)
 

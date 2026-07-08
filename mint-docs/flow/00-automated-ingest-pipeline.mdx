@@ -153,8 +153,9 @@ GET /pipeline/status/{clientOrgId}
 **Auth:** external-backend verify (see below) · **Response:** `200`
 
 Returns the **latest pipeline run** for the organisation — or a specific one
-via `?pipeline_run_id=` — including per-document/per-stage step detail. Poll
-every few seconds while `status` is `queued` or `running`.
+via `?pipeline_run_id=` — including per-document/per-stage step detail and a
+rolled-up `stage_summary`. Poll every few seconds while `status` is `queued` or
+`running` (there is no ETA field — stop when `status` is `completed` or `failed`).
 
 **Response 200 (excerpt)**
 
@@ -167,6 +168,11 @@ every few seconds while `status` is `queued` or `running`.
     "status": "running",
     "current_stage": "score_risks",
     "progress_percent": 75,
+    "stage_summary": [
+      { "stage": "ingest_register", "status": "completed", "document_count": 1, "failed_count": 0, "started_at": "…", "completed_at": "…" },
+      { "stage": "extract_controls", "status": "completed", "document_count": 2, "failed_count": 0, "started_at": "…", "completed_at": "…" },
+      { "stage": "score_risks", "status": "running", "document_count": 1, "failed_count": 0, "started_at": "…", "completed_at": null }
+    ],
     "total_documents": 3,
     "new_documents": 2,
     "skipped_duplicate_documents": 1,

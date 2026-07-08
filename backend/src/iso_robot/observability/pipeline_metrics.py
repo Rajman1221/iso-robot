@@ -9,13 +9,11 @@ from datetime import datetime, timezone
 from iso_robot.observability.metrics import (
     PIPELINE_ACTIVE_RUNS,
     PIPELINE_RUN_DURATION_SECONDS,
-    PIPELINE_RUN_ESTIMATED_REMAINING_SECONDS,
     PIPELINE_RUN_PROGRESS_PERCENT,
     PIPELINE_STAGE_STATUS,
 )
 from iso_robot.observability.pipeline_progress import (
     _STAGE_STATUS_VALUE,
-    estimate_remaining_seconds,
     progress_percent,
 )
 
@@ -71,18 +69,6 @@ async def _refresh_pipeline_metrics() -> None:
                 }
                 for s in steps_result.scalars().all()
             ]
-
-            remaining = estimate_remaining_seconds(
-                status=status,
-                current_stage=str(run.current_stage),
-                started_at=run.started_at or run.created_at,
-                steps=steps,
-            )
-            if remaining is not None:
-                PIPELINE_RUN_ESTIMATED_REMAINING_SECONDS.labels(
-                    pipeline_run_id=str(run.id),
-                    client_org_id=org,
-                ).set(remaining)
 
             for step in steps:
                 PIPELINE_STAGE_STATUS.labels(

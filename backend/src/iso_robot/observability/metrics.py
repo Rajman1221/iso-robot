@@ -93,11 +93,6 @@ PIPELINE_RUN_DURATION_SECONDS = Gauge(
     "Elapsed seconds since pipeline run started",
     ["pipeline_run_id", "client_org_id"],
 )
-PIPELINE_RUN_ESTIMATED_REMAINING_SECONDS = Gauge(
-    "pipeline_run_estimated_remaining_seconds",
-    "Estimated seconds remaining for active pipeline run",
-    ["pipeline_run_id", "client_org_id"],
-)
 PIPELINE_DOCUMENTS_PROCESSED_TOTAL = Counter(
     "pipeline_documents_processed_total",
     "Documents processed during pipeline extraction",

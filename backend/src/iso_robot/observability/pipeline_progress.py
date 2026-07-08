@@ -37,53 +37,6 @@ def progress_percent(status: str, current_stage: str) -> int:
     return round(idx / max(len(PIPELINE_STAGES) - 1, 1) * 100)
 
 
-def elapsed_seconds(started_at: Any, *, now: Optional[datetime] = None) -> Optional[float]:
-    start = parse_timestamp(started_at)
-    if start is None:
-        return None
-    now = now or datetime.now(timezone.utc)
-    return max((now - start).total_seconds(), 0.0)
-
-
-def estimate_remaining_seconds(
-    *,
-    status: str,
-    current_stage: str,
-    started_at: Any,
-    steps: list[dict[str, Any]],
-) -> Optional[float]:
-    if status not in ("queued", "running"):
-        return 0.0 if status == "completed" else None
-
-    elapsed = elapsed_seconds(started_at)
-    if elapsed is None:
-        return None
-
-    progress = progress_percent(status, current_stage)
-    if progress <= 0:
-        return None
-    if progress >= 100:
-        return 0.0
-
-    stage_durations: list[float] = []
-    for step in steps:
-        s_start = parse_timestamp(step.get("started_at"))
-        s_end = parse_timestamp(step.get("completed_at"))
-        if s_start and s_end and s_end > s_start:
-            stage_durations.append((s_end - s_start).total_seconds())
-
-    if stage_durations:
-        avg_stage = sum(stage_durations) / len(stage_durations)
-        try:
-            stage_idx = PIPELINE_STAGES.index(current_stage)
-        except ValueError:
-            stage_idx = 0
-        remaining_stages = max(len(PIPELINE_STAGES) - 1 - stage_idx, 0)
-        return avg_stage * remaining_stages
-
-    return elapsed * (100 - progress) / progress
-
-
 def stage_summary(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Aggregate per-stage status from pipeline_document_steps rows."""
     by_stage: dict[str, dict[str, Any]] = {}

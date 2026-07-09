@@ -218,37 +218,54 @@ curl "http://157.20.190.175:8000/api/v1/pipeline/status/{clientOrgId}" \
     "started_at": "2026-06-30T10:00:00Z",
     "completed_at": null,
     "created_at": "2026-06-30T09:59:58Z",
-    "steps": [
-      { "stage": "ingest_register", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:00:00Z", "completed_at": "2026-06-30T10:00:01Z" },
-      { "stage": "extract_controls", "status": "completed", "document_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567891", "filename": null, "error": null, "started_at": "2026-06-30T10:00:01Z", "completed_at": "2026-06-30T10:01:20Z" },
-      { "stage": "extract_controls", "status": "completed", "document_id": "b2c3d4e5-f6a7-8901-bcde-f12345678902", "filename": null, "error": null, "started_at": "2026-06-30T10:00:01Z", "completed_at": "2026-06-30T10:01:35Z" },
-      { "stage": "issues_from_controls", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:01:36Z", "completed_at": "2026-06-30T10:02:10Z" },
-      { "stage": "classify_issues", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:02:10Z", "completed_at": "2026-06-30T10:02:40Z" },
-      { "stage": "generate_charts", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:02:40Z", "completed_at": "2026-06-30T10:02:45Z" },
-      { "stage": "risk_discovery", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:02:45Z", "completed_at": "2026-06-30T10:03:30Z" },
-      { "stage": "score_risks", "status": "running", "document_id": null, "filename": null, "error": null, "started_at": "2026-06-30T10:03:30Z", "completed_at": null }
+    "stages": [
+      {
+        "stage": "ingest_register",
+        "status": "completed",
+        "batch_count": 0,
+        "failed_batches": 0,
+        "batches": []
+      },
+      {
+        "stage": "extract_controls",
+        "status": "completed",
+        "batch_count": 2,
+        "failed_batches": 0,
+        "batches": [
+          { "batch_index": 0, "status": "completed", "item_count": 1, "error": null },
+          { "batch_index": 1, "status": "completed", "item_count": 1, "error": null }
+        ]
+      },
+      {
+        "stage": "score_risks",
+        "status": "running",
+        "batch_count": 1,
+        "failed_batches": 0,
+        "batches": [
+          { "batch_index": 0, "status": "running", "item_count": 5, "error": null }
+        ]
+      }
     ]
   }
 }
 ```
 
-`steps[]` rows track progress at batch granularity. Batched stages
-(`extract_controls`, `issues_from_controls`, `classify_issues`, `score_risks`)
-emit one row per batch — each carries a `batch_index` and the ids it processed —
-plus a run-level summary row (`batch_index: null`) written when the stage
-finishes. Single-shot org-wide stages (`generate_charts`, `risk_discovery`,
-`risk_tagging`, `risk_owner_assignment`) emit just the summary row.
+`stage_summary[]` rolls up all step rows by stage (including finalize rows) for
+compact progress UIs — status, step counts, and earliest/latest timestamps.
 
-`stage_summary[]` rolls up `steps[]` by stage (batch/document counts, failed
-counts, and earliest/latest timestamps). Use it for compact progress UIs; use
-`steps[]` for per-batch detail.
+`stages[]` nests batch-level detail under each stage. Each entry includes
+`batch_count` / `failed_batches` and a `batches[]` array of slim objects
+(`batch_index`, `status`, `item_count`, `error`). Only rows with a non-null
+`batch_index` appear in `batches[]`; run-level finalize rows are omitted there
+but still feed `stage_summary`.
 
-The response also carries `stage_totals` — per-stage batch counters
-(`{stage: {total_batches, completed_batches, failed_batches}}`) that feed the
-intra-stage portion of `progress_percent`.
+Batched stages (`extract_controls`, `issues_from_controls`, `classify_issues`,
+`score_risks`) emit one batch per work chunk. Single-shot org-wide stages
+(`generate_charts`, `risk_discovery`, `risk_tagging`, `risk_owner_assignment`)
+typically have one batch (or none for `ingest_register`).
 
 The response does **not** include elapsed-time or ETA fields — poll `status`,
-`current_stage`, and `steps[].status` instead.
+`current_stage`, `stage_summary[]`, and `stages[].batches[].status` instead.
 
 ### `status` values (pipeline run)
 
@@ -478,7 +495,7 @@ workers cannot read files the API saved to container-local `/tmp`.
 
 <Tip>
 `progress_percent` is a coarse UI hint (`current_stage`'s index in the 10-stage
-list). Prefer `current_stage`, `stage_summary[]`, and `steps[].status` for
+list). Prefer `current_stage`, `stage_summary[]`, and `stages[].batches[].status` for
 integration logic. There is no server-side ETA — keep polling until `status` is
 `completed` or `failed`.
 </Tip>

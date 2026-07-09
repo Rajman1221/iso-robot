@@ -173,9 +173,10 @@ GET /pipeline/status/{clientOrgId}
 **Auth:** external-backend verify (see below) · **Response:** `200`
 
 Returns the **latest pipeline run** for the organisation — or a specific one
-via `?pipeline_run_id=` — including per-document/per-stage step detail and a
-rolled-up `stage_summary`. Poll every few seconds while `status` is `queued` or
-`running` (there is no ETA field — stop when `status` is `completed` or `failed`).
+via `?pipeline_run_id=` — including a rolled-up `stage_summary` and nested
+`stages[]` with per-batch detail. Poll every few seconds while `status` is
+`queued` or `running` (there is no ETA field — stop when `status` is
+`completed` or `failed`).
 
 **Response 200 (excerpt)**
 
@@ -203,10 +204,26 @@ rolled-up `stage_summary`. Poll every few seconds while `status` is `queued` or
     "started_at": "2026-06-30T10:00:00Z",
     "completed_at": null,
     "created_at": "2026-06-30T09:59:58Z",
-    "steps": [
-      { "stage": "ingest_register", "status": "completed", "document_id": null, "filename": null, "error": null, "started_at": "…", "completed_at": "…" },
-      { "stage": "extract_controls", "status": "completed", "document_id": "uuid", "filename": "policy.pdf", "error": null, "started_at": "…", "completed_at": "…" },
-      { "stage": "score_risks", "status": "running", "document_id": null, "filename": null, "error": null, "started_at": "…", "completed_at": null }
+    "stages": [
+      {
+        "stage": "extract_controls",
+        "status": "completed",
+        "batch_count": 2,
+        "failed_batches": 0,
+        "batches": [
+          { "batch_index": 0, "status": "completed", "item_count": 1, "error": null },
+          { "batch_index": 1, "status": "completed", "item_count": 1, "error": null }
+        ]
+      },
+      {
+        "stage": "score_risks",
+        "status": "running",
+        "batch_count": 1,
+        "failed_batches": 0,
+        "batches": [
+          { "batch_index": 0, "status": "running", "item_count": 5, "error": null }
+        ]
+      }
     ]
   }
 }

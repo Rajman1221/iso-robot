@@ -36,6 +36,8 @@ class Control(Base):
     framework: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source_page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     client_org_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    reasoning: Mapped[Optional[float]] = mapped_column(Text, nullable=True)
     created_at: Mapped[Any] = Timestamp()
 
 
@@ -66,6 +68,8 @@ class Issue(Base):
     # created before this column existed (SQL treats NULLs as distinct, so they
     # never collide under the unique index below).
     source_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    confidence: Mapped[Optional[str]] = mapped_column(Float, nullable=True)
+    reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[Any] = Timestamp()
 
     __table_args__ = (
@@ -97,6 +101,7 @@ class CandidateRisk(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     domain: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    reasoning: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     client_org_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     created_at: Mapped[Any] = Timestamp()
 

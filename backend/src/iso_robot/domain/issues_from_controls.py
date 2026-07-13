@@ -42,6 +42,7 @@ def _system_prompt() -> str:
         "title (short string), body (2–5 sentences), scope ('internal' or 'external'), "
         "sector (short industry/sector label), region_hint (geographic or regional focus if inferable, else null), "
         "confidence (number 0–1: your confidence that this issue is well-grounded in the cited controls), "
+        "reasoning (a concise 1-2 sentence explanation for why this confidence score was assigned), "
         "control_ids (array of control id strings from the batch only — every id you cite must appear in the input). "
         "Prefer 3–8 issues per batch; merge related controls. Do not invent control_ids."
     )
@@ -108,6 +109,7 @@ def _normalize_llm_issues(raw: Dict[str, Any], valid_ids: set[str]) -> List[Dict
                 "region_hint": region_hint,
                 "control_ids": control_ids,
                 "confidence": confidence,
+                "reasoning":(it.get("reasoning") or "").strip() or None,
                 "confidence_source": confidence_source,
             }
         )
@@ -203,6 +205,8 @@ def _build_issue_rows(
                 "region_hint": iss.get("region_hint") or region_hint,
                 "client_org_id": client_org_id,
                 "source_fingerprint": _fingerprint(client_org_id, control_ids, title),
+                "confidence": iss.get("confidence"),
+                "reasoning": iss.get("reasoning"),
                 "control_ids": control_ids,
                 "raw_payload": {
                     "origin": ORIGIN_FROM_CONTROLS,
@@ -239,7 +243,7 @@ async def _persist_issue_rows(
 
     insert_rows = [
         {k: r[k] for k in ("id", "title", "body", "region_hint", "client_org_id",
-                           "source_fingerprint", "raw_payload")}
+                           "source_fingerprint", "confidence", "reasoning","raw_payload")}
         for r in fresh
     ]
     try:

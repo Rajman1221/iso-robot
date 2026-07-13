@@ -309,6 +309,7 @@ def heuristic_candidate_risks(bundle: List[dict[str, Any]]) -> List[dict[str, An
                 "description": (str(item.get("body") or ""))[:2000],
                 "domain": "External_monitoring",
                 "confidence": 0.45,
+                "reasoning": "Fallback heuristic confidence because LLM candidate risk generation was unaviable",
                 "issue_ids": [iid],
             }
         else:

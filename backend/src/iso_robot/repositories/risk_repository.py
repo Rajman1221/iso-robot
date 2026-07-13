@@ -39,6 +39,7 @@ class CandidateRiskRepository:
         description: Optional[str],
         domain: Optional[str],
         confidence: Optional[float],
+        reasoning: Optional[str],
         client_org_id: Optional[str] = None,
     ) -> None:
         self._session.add(

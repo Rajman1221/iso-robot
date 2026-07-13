@@ -38,8 +38,8 @@ def _control_system_prompt(*, has_page_markers: bool) -> str:
         "Do **not** merge unrelated bullets into one control_text. "
         "A page with 12 bullets should yield about 12 controls unless two are duplicate wording.\n"
         "Return exactly one JSON object with key \"controls\" whose value is an array of objects. "
-        'Each object MUST include \"control_text\" (string): one requirement, verbatim or lightly edited for clarity. '
-        "Optional: section_ref, framework. "
+        'Each object MUST include \"control_text\" (string), confidence(float between 0 and 1) , reasoning(short explanation on confidence score): one requirement, verbatim or lightly edited for clarity. '
+        "Optional: section_ref, framework, source_page. "
     )
     page_instr = (
         "Optional key \"source_page\" (integer): **required whenever possible**. "
@@ -205,6 +205,8 @@ async def _llm_controls_from_chunk(
         out.append(
             {
                 "control_text": text[:2000],
+                "confidence": item.get("confidence"),
+                "reasoning":item.get("reasoning"),
                 "section_ref": item.get("section_ref"),
                 "framework": item.get("framework"),
                 "source_page": page_i,
@@ -489,6 +491,8 @@ async def _persist_controls_from_segment(
                 "document_id": document_id,
                 "client_org_id": client_org_id,
                 "control_text": ct,
+                "condidence":c.get("confidence"),
+                "reasoning":c.get("reasoning"),
                 "section_ref": str(c["section_ref"]) if c.get("section_ref") else None,
                 "framework": str(c["framework"]) if c.get("framework") else None,
                 "source_page": c.get("source_page"),

@@ -63,7 +63,7 @@ async def _llm_discover_candidates(
     system = (
         "You synthesize enterprise risks from operational monitoring issues. "
         "Return JSON {\"candidates\": ["
-        "{\"title\": str, \"description\": str, \"domain\": str, \"confidence\": number 0-1, "
+        "{\"title\": str, \"description\": str, \"domain\": str, \"confidence\": number 0-1, \"reasoning\": str, "
         "\"issue_ids\": [str, ...] } ]}. "
         "Group related issues when they describe the same risk theme. "
         "Each candidate must cite at least one issue id from the input."
@@ -98,6 +98,7 @@ async def _llm_discover_candidates(
                 "description": str(c.get("description") or "").strip(),
                 "domain": str(c.get("domain") or "").strip() or None,
                 "confidence": max(0.0, min(1.0, conf)),
+                "reasoning": str(c.get("reasoning") or "").strip() or None,
                 "issue_ids": iids,
             }
         )
@@ -188,6 +189,7 @@ async def run_risk_discovery(
             description=c.get("description") or None,
             domain=c.get("domain"),
             confidence=c.get("confidence"),
+            reasoning=c.get("reasoning"),
             client_org_id=client_org_id,
         )
         query = f"{c.get('title') or ''} {c.get('description') or ''}"

@@ -32,6 +32,8 @@ class ControlRepository:
                     section_ref=r.get("section_ref"),
                     framework=r.get("framework"),
                     source_page=r.get("source_page"),
+                    confidence=r.get("confidence"),
+                    reasoning=r.get("reasoning"),
                     created_at=r.get("created_at") or utcnow(),
                 )
             )

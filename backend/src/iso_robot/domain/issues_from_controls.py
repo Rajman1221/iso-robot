@@ -243,7 +243,7 @@ async def _persist_issue_rows(
 
     insert_rows = [
         {k: r[k] for k in ("id", "title", "body", "region_hint", "client_org_id",
-                           "source_fingerprint", "confidence", "reasoning","raw_payload")}
+                           "source_fingerprint", "confidence", "reasoning", "raw_payload")}
         for r in fresh
     ]
     try:
@@ -258,7 +258,7 @@ async def _persist_issue_rows(
             return {"issue_ids": [], "created": 0, "skipped_duplicates": skipped}
         await issue_repo.insert_many(
             [{k: r[k] for k in ("id", "title", "body", "region_hint", "client_org_id",
-                                "source_fingerprint", "raw_payload")} for r in fresh]
+                                "source_fingerprint", "confidence", "reasoning", "raw_payload")} for r in fresh]
         )
 
     mapping = {r["id"]: r["control_ids"] for r in fresh if r["control_ids"]}

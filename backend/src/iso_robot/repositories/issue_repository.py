@@ -29,6 +29,8 @@ class IssueRepository:
         region_hint: Optional[str] = None,
         raw_payload: Optional[dict[str, Any]] = None,
         client_org_id: Optional[str] = None,
+        confidence: Optional[float]= None,
+        reasoning: Optional[str]= None,
     ) -> None:
         self._session.add(
             Issue(
@@ -40,6 +42,8 @@ class IssueRepository:
                 region_hint=region_hint,
                 raw_payload_json=raw_payload or {},
                 client_org_id=client_org_id,
+                confidence=confidence,
+                reasoning=reasoning,
             )
         )
         await self._session.commit()
@@ -64,6 +68,8 @@ class IssueRepository:
                     raw_payload_json=r.get("raw_payload") or {},
                     client_org_id=r.get("client_org_id"),
                     source_fingerprint=r.get("source_fingerprint"),
+                    confidence=r.get("confidence"),
+                    reasoning=r.get("reasoning"),
                 )
             )
         await self._session.commit()

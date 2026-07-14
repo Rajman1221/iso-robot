@@ -50,6 +50,7 @@ class CandidateRiskRepository:
                 description=description,
                 domain=domain,
                 confidence=confidence,
+                reasoning=reasoning,
                 client_org_id=client_org_id,
             )
         )

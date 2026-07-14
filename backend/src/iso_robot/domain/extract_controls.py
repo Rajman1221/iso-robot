@@ -38,7 +38,7 @@ def _control_system_prompt(*, has_page_markers: bool) -> str:
         "Do **not** merge unrelated bullets into one control_text. "
         "A page with 12 bullets should yield about 12 controls unless two are duplicate wording.\n"
         "Return exactly one JSON object with key \"controls\" whose value is an array of objects. "
-        'Each object MUST include \"control_text\" (string), confidence(float between 0 and 1) , reasoning(short explanation on confidence score): one requirement, verbatim or lightly edited for clarity. '
+        'Each object MUST include "control_text" (string), "confidence" (float between 0 and 1), and "reasoning" (a short explanation for the confidence score): one requirement, verbatim or lightly edited for clarity. '
         "Optional: section_ref, framework, source_page. "
     )
     page_instr = (
